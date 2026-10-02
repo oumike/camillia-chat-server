@@ -57,10 +57,10 @@ The server is on the same region, preset and frequency slot as the mesh it serve
 
 | Message | Sent on | Why |
 |---|---|---|
-| `DISCOVER`, `ANNOUNCE` | The **discovery channel**: fixed name `camillia-cs` and a fixed 16-byte AES key compiled into both firmwares | Any camillia node can find any server without knowing its channels |
+| `DISCOVER`, `ANNOUNCE` | The **discovery channel**: fixed name `camillia-cs` and a fixed 16-byte AES key compiled into both firmwares (`45a51ee6e782493ffb9cdb164bd7cdf7`, defined in `src/cs_proto.cpp`) | Any camillia node can find any server without knowing its channels |
 | `REQUEST`, `BATCH` | The **real channel** being synced, encrypted with that channel's key | Only a node holding a channel's key can ask for, or read, its history. This is the only access control in v1 |
 
-A node's channel and a server's channel **match** when both name and key are identical. Matching uses a **channel ID**: the first 4 bytes of `SHA-256(name || key)`. Name alone is not enough, since many meshes have a "LongFast".
+A node's channel and a server's channel **match** when both name and key are identical. Matching uses a **channel ID**: the first 4 bytes of `SHA-256(name || key)`, read little-endian. A 1-byte PSK is expanded to Meshtastic's 16-byte default-key form first, so `AQ==` and its expanded key give the same ID. Name alone is not enough, since many meshes have a "LongFast".
 
 ### 4.3 Messages
 
