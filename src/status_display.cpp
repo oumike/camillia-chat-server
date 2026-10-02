@@ -15,6 +15,7 @@ void displayBegin() {
     digitalWrite(OLED_RST, LOW);  delay(20);
     digitalWrite(OLED_RST, HIGH); delay(20);
     s_oled.init();
+    s_oled.flipScreenVertically();   // rotates 180° to suit how the board sits
     s_oled.setFont(ArialMT_Plain_10);
 }
 
