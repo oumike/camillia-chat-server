@@ -62,3 +62,91 @@ int packItems(const StoredMsg *msgs, int n, uint32_t nowUnix, bool timeValid,
     } while (i < n);
     return np;
 }
+
+// ── CsServer ─────────────────────────────────────────────────────
+
+void CsServer::begin(const ServerConfig &cfg, ChannelStore *stores, const uint32_t *chanIds,
+                     const char (*chanNames)[12], int chanCount) {
+    _cfg = cfg;
+    if (_cfg.batchSize < 1) _cfg.batchSize = 1;
+    if (_cfg.batchSize > CS_MAX_BATCH) _cfg.batchSize = CS_MAX_BATCH;
+    _stores = stores;
+    _chanCount = chanCount > MAX_CHANNELS ? MAX_CHANNELS : chanCount;
+    memset(&_announce, 0, sizeof(_announce));
+    strncpy(_announce.shortName, _cfg.shortName, sizeof(_announce.shortName) - 1);
+    _announce.count = (uint8_t)_chanCount;
+    for (int i = 0; i < _chanCount; i++) {
+        _announce.ch[i].id = chanIds[i];
+        strncpy(_announce.ch[i].name, chanNames[i], sizeof(_announce.ch[i].name) - 1);
+    }
+    _qLen = _annLen = _txCount = _txIdx = 0;
+    _sentAny = false;
+}
+
+void CsServer::onPacket(uint32_t from, int chanSlot, uint8_t hopsTravelled,
+                        const uint8_t *payload, size_t len, uint32_t) {
+    if (hopsTravelled > _cfg.maxHops) return;
+    Type t;
+    if (!peekType(payload, len, t)) return;
+
+    if (t == DISCOVER) {
+        for (int i = 0; i < _annLen; i++) if (_ann[i].to == from) return;
+        if (_annLen < CS_ANNOUNCE_CAP) _ann[_annLen++] = {from, hopsTravelled};
+        return;
+    }
+    if (t != REQUEST || chanSlot < 0 || chanSlot >= _chanCount) return;
+
+    Request req;
+    if (!decodeRequest(payload, len, req)) return;
+    Pending p{from, chanSlot, hopsTravelled, req};
+    for (int i = 0; i < _qLen; i++) {
+        if (_q[i].from == from && _q[i].slot == chanSlot) { _q[i] = p; return; }
+    }
+    if (_qLen < CS_QUEUE_CAP) _q[_qLen++] = p;
+}
+
+void CsServer::startNext(uint32_t nowUnix, bool timeValid, uint32_t nowUptimeSec) {
+    Pending p = _q[0];
+    memmove(_q, _q + 1, sizeof(Pending) * (size_t)(_qLen - 1));
+    _qLen--;
+
+    const ChannelStore &store = _stores[p.slot];
+    BatchPlan plan = planBatch(store, selectStart(store, p.req), _cfg.batchSize, _msgs);
+    _txCount = packItems(_msgs, plan.count, nowUnix, timeValid, nowUptimeSec, store.epoch(),
+                         plan.more, _tx, _txLen, CS_MAX_BATCH);
+    if (_txCount < 0) _txCount = 0;
+    _txIdx = 0;
+    _txTo = p.from;
+    _txSlot = p.slot;
+    _txHops = p.hops;
+}
+
+bool CsServer::poll(uint32_t nowMs, uint32_t nowUnix, bool timeValid, uint32_t nowUptimeSec,
+                    Outgoing &out) {
+    if (_sentAny && (int32_t)(nowMs - _nextSendMs) < 0) return false;
+
+    if (_annLen) {
+        AnnounceTo a = _ann[0];
+        memmove(_ann, _ann + 1, sizeof(AnnounceTo) * (size_t)(_annLen - 1));
+        _annLen--;
+        out.to = a.to;
+        out.chanSlot = -1;
+        out.hopLimit = a.hops;
+        out.len = encodeAnnounce(_announce, out.payload, sizeof(out.payload));
+    } else {
+        if (!busy()) {
+            if (!_qLen) return false;
+            startNext(nowUnix, timeValid, nowUptimeSec);
+            if (!busy()) return false;
+        }
+        out.to = _txTo;
+        out.chanSlot = _txSlot;
+        out.hopLimit = _txHops;
+        out.len = _txLen[_txIdx];
+        memcpy(out.payload, _tx[_txIdx], out.len);
+        _txIdx++;
+    }
+    _sentAny = true;
+    _nextSendMs = nowMs + _cfg.packetGapMs;
+    return true;
+}

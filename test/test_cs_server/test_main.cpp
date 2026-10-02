@@ -139,6 +139,150 @@ void test_pack_empty_sends_one_last_packet() {
     TEST_ASSERT_EQUAL_UINT32(9, h.epoch);
 }
 
+// ── Task 5: CsServer queue, hops, pacing ─────────────────────────
+
+struct Rig {
+    ChannelStore *stores;
+    uint32_t ids[3] = {0x11111111, 0x22222222, 0x33333333};
+    char names[3][12] = {"LongFast", "camillia", "third"};
+    CsServer server;
+    Rig(int msgs, int textLen, uint8_t maxHops = 7, uint8_t batch = 10, uint16_t gap = 3000) {
+        stores = new ChannelStore[3];
+        for (int c = 0; c < 3; c++) stores[c].begin(malloc, fakeRandom);
+        char text[CS_MAX_TEXT + 1];
+        memset(text, 'q', textLen); text[textLen] = 0;
+        for (int i = 1; i <= msgs; i++) stores[0].add(0xAB, (uint32_t)i, text, textLen, 0, 5, 0);
+        ServerConfig cfg;
+        cfg.maxHops = maxHops; cfg.batchSize = batch; cfg.packetGapMs = gap;
+        strcpy(cfg.shortName, "CSRV");
+        server.begin(cfg, stores, ids, names, 2);
+    }
+    ~Rig() { delete[] stores; }
+    void request(uint32_t from, int slot, uint8_t hops, uint32_t cursor, uint32_t nowMs = 0) {
+        Request r{stores[slot].epoch(), cursor, 0, 0};
+        uint8_t buf[MAX_PAYLOAD];
+        size_t n = encodeRequest(r, buf, sizeof buf);
+        server.onPacket(from, slot, hops, buf, n, nowMs);
+    }
+    bool poll(uint32_t nowMs, Outgoing &o) { return server.poll(nowMs, 0, false, nowMs / 1000, o); }
+};
+
+static void decodeOut(const Outgoing &o, BatchHeader &h, Item *items, uint8_t &n) {
+    TEST_ASSERT_TRUE(decodeBatch(o.payload, o.len, h, items, 16, n));
+}
+
+void test_discover_yields_announce() {
+    Rig rig(0, 5);
+    uint8_t buf[4];
+    size_t n = encodeDiscover(buf, sizeof buf);
+    rig.server.onPacket(0xC0FFEE, -1, 2, buf, n, 0);
+    Outgoing o;
+    TEST_ASSERT_TRUE(rig.poll(0, o));
+    TEST_ASSERT_EQUAL_HEX32(0xC0FFEE, o.to);
+    TEST_ASSERT_EQUAL(-1, o.chanSlot);
+    TEST_ASSERT_EQUAL(2, o.hopLimit);
+    Announce a;
+    TEST_ASSERT_TRUE(decodeAnnounce(o.payload, o.len, a));
+    TEST_ASSERT_EQUAL_STRING("CSRV", a.shortName);
+    TEST_ASSERT_EQUAL(2, a.count);
+    TEST_ASSERT_EQUAL_HEX32(0x11111111, a.ch[0].id);
+    TEST_ASSERT_EQUAL_STRING("camillia", a.ch[1].name);
+    TEST_ASSERT_FALSE(rig.poll(10000, o));
+}
+
+void test_ignores_beyond_max_hops() {
+    Rig rig(5, 5, /*maxHops=*/3);
+    rig.request(0xA, 0, 4, 0);
+    TEST_ASSERT_EQUAL(0, rig.server.queueLength());
+    uint8_t buf[4];
+    rig.server.onPacket(0xB, -1, 4, buf, encodeDiscover(buf, sizeof buf), 0);
+    Outgoing o;
+    TEST_ASSERT_FALSE(rig.poll(0, o));
+}
+
+void test_ignores_request_on_discovery_or_unused_slot() {
+    Rig rig(5, 5);
+    Request r{0, 0, 0, 0};
+    uint8_t buf[MAX_PAYLOAD];
+    size_t n = encodeRequest(r, buf, sizeof buf);
+    rig.server.onPacket(0xA, -1, 0, buf, n, 0);
+    rig.server.onPacket(0xA, 2, 0, buf, n, 0);   // slot 2 exists but chanCount is 2
+    TEST_ASSERT_EQUAL(0, rig.server.queueLength());
+}
+
+void test_reply_hop_limit_matches_request() {
+    Rig rig(3, 5, /*maxHops=*/7);
+    rig.request(0xA, 0, 2, 0);
+    Outgoing o;
+    TEST_ASSERT_TRUE(rig.poll(0, o));
+    TEST_ASSERT_EQUAL(2, o.hopLimit);
+    TEST_ASSERT_EQUAL(0, o.chanSlot);
+    TEST_ASSERT_EQUAL_HEX32(0xA, o.to);
+}
+
+void test_request_paced_by_gap() {
+    Rig rig(25, 150);   // 150-byte texts: one item per packet
+    rig.request(0xA, 0, 0, 0);
+    Outgoing o;
+    TEST_ASSERT_TRUE(rig.poll(0, o));
+    TEST_ASSERT_FALSE(rig.poll(2999, o));
+    TEST_ASSERT_TRUE(rig.poll(3000, o));
+    uint32_t t = 3000;
+    BatchHeader h; Item items[16]; uint8_t n;
+    int packets = 2;
+    while (true) {
+        decodeOut(o, h, items, n);
+        if (h.flags & FLAG_LAST) break;
+        t += 3000;
+        TEST_ASSERT_TRUE(rig.poll(t, o));
+        packets++;
+    }
+    TEST_ASSERT_EQUAL(10, packets);
+    TEST_ASSERT_TRUE(h.flags & FLAG_MORE);
+    TEST_ASSERT_EQUAL_UINT32(10, items[n - 1].seq);
+    TEST_ASSERT_FALSE(rig.server.busy());
+}
+
+void test_queue_capacity_24() {
+    Rig rig(5, 5);
+    for (uint32_t i = 0; i < 25; i++) rig.request(0x100 + i, 0, 0, 0);
+    TEST_ASSERT_EQUAL(24, rig.server.queueLength());
+}
+
+void test_queue_replaces_duplicate_requester() {
+    Rig rig(20, 5);
+    rig.request(0xB, 0, 0, 0);    // occupies the server first
+    Outgoing o;
+    TEST_ASSERT_TRUE(rig.poll(0, o));
+    rig.request(0xA, 0, 0, 0);
+    rig.request(0xA, 0, 0, 15);   // continuation replaces the queued request
+    TEST_ASSERT_EQUAL(1, rig.server.queueLength());
+    TEST_ASSERT_TRUE(rig.poll(3000, o));
+    TEST_ASSERT_EQUAL_HEX32(0xA, o.to);
+    BatchHeader h; Item items[16]; uint8_t n;
+    decodeOut(o, h, items, n);
+    TEST_ASSERT_EQUAL_UINT32(16, items[0].seq);
+    TEST_ASSERT_EQUAL(5, n);
+}
+
+void test_serves_fifo_one_at_a_time() {
+    Rig rig(25, 150);
+    rig.request(0xA, 0, 0, 0);
+    rig.request(0xB, 0, 0, 0);
+    Outgoing o;
+    uint32_t t = 0;
+    int forA = 0;
+    bool sawB = false;
+    while (rig.poll(t, o) || rig.server.busy() || rig.server.queueLength()) {
+        if (o.to == 0xA) { TEST_ASSERT_FALSE(sawB); forA++; }
+        if (o.to == 0xB) sawB = true;
+        t += 3000;
+        if (t > 200000) break;
+    }
+    TEST_ASSERT_EQUAL(10, forA);
+    TEST_ASSERT_TRUE(sawB);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_since_uses_cursor_when_epoch_matches);
@@ -151,5 +295,13 @@ int main() {
     RUN_TEST(test_pack_short_messages_share_a_packet);
     RUN_TEST(test_pack_age_unknown_after_reboot);
     RUN_TEST(test_pack_empty_sends_one_last_packet);
+    RUN_TEST(test_discover_yields_announce);
+    RUN_TEST(test_ignores_beyond_max_hops);
+    RUN_TEST(test_ignores_request_on_discovery_or_unused_slot);
+    RUN_TEST(test_reply_hop_limit_matches_request);
+    RUN_TEST(test_request_paced_by_gap);
+    RUN_TEST(test_queue_capacity_24);
+    RUN_TEST(test_queue_replaces_duplicate_requester);
+    RUN_TEST(test_serves_fifo_one_at_a_time);
     return UNITY_END();
 }
