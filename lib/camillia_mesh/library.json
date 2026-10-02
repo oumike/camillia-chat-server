@@ -1,0 +1,1 @@
+{ "name": "camillia_mesh", "version": "0.0.0", "build": { "flags": ["-std=gnu++17"] } }

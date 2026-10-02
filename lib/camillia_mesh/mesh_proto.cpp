@@ -1,0 +1,1694 @@
+#include <math.h>   // lroundf, for the traceroute SNR field
+#include "mesh_proto.h"
+#include "debug_flags.h"
+#include "mbedtls/aes.h"
+#include "mbedtls/ccm.h"
+#include "mbedtls/sha256.h"
+#include <Curve25519.h>
+#include <esp_random.h>
+#include "xeddsa.h"
+
+// ── PSK expansion ─────────────────────────────────────────────
+// Meshtastic DEFAULT_KEY = kDkBase[0..14] + PSK_byte.
+// PSK 0x01 → DEFAULT_KEY unchanged (base64 "AQ==").
+static const uint8_t kDkBase[15] = {
+    0xd4, 0xf1, 0xbb, 0x3a, 0x20, 0x29, 0x07, 0x59,
+    0xf0, 0xbc, 0xff, 0xab, 0xcf, 0x4e, 0x69
+};
+
+void expandPsk(uint8_t psk, uint8_t out[16]) {
+    memcpy(out, kDkBase, 15);
+    out[15] = psk;
+}
+
+// CRC-32 (IEEE 802.3): reflected, polynomial 0xEDB88320, initial 0xFFFFFFFF,
+// final complement — byte for byte what Meshtastic gets from crc32Buffer() in
+// the ErriezCRC32 library it links, and identical to zlib's crc32().
+//
+// Written out rather than borrowed from esp_rom_crc32_le(), whose seed and
+// inversion conventions differ from Erriez's and would be easy to get subtly
+// wrong. It runs once at boot over 32 bytes, so the bitwise form costs nothing
+// and is checkable by eye against the reference.
+//
+// Exactness matters here in a way it usually does not: this value becomes our
+// node number, and a 2.8 node decides whether to trust a first-contact NodeInfo
+// by recomputing crc32 over the sender's public key and comparing. One bit out
+// and the check fails for every peer, silently.
+uint32_t meshCrc32(const void *buf, size_t len) {
+    uint32_t crc = 0xFFFFFFFFu;
+    const uint8_t *p = (const uint8_t *)buf;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= p[i];
+        for (int b = 0; b < 8; b++) {
+            const uint32_t mask = (uint32_t)(-(int32_t)(crc & 1u));
+            crc = (crc >> 1) ^ (0xEDB88320u & mask);
+        }
+    }
+    return ~crc;
+}
+
+bool channelKeyIsPublic(const ChannelKey &ck) {
+    // Mirrors upstream channelFileUsesPublicKey() (mesh/Channels.cpp), mapped
+    // onto how we store keys. Upstream's psk.size cases are 0 (absent), 1 (an
+    // index into the defaultpsk family) and 16 (an expanded key); ours are the
+    // same, because resolveMeshKey() expands a 1-byte PSK at point of use and
+    // leaves everything else alone.
+    //
+    //   keyLen 0  — no encryption at all, so anyone within earshot reads it.
+    //   keyLen 1  — a defaultpsk index. The whole family is published, and
+    //               index 0x00 disables encryption outright.
+    //   keyLen 16 — public when it is a member of that family, which is what
+    //               the first 15 bytes identify: the family varies only in its
+    //               last byte, which is why upstream compares sizeof-1 and why
+    //               kDkBase is 15 bytes rather than 16.
+    //
+    // A 32-byte key, or any 16-byte key that is not a default variant, is a key
+    // someone chose. Not our business to coarsen.
+    //
+    // Upstream additionally resolves an unset SECONDARY channel against the
+    // PRIMARY's key. That case cannot arise here: every ChannelKey carries its
+    // own key rather than inheriting one.
+    if (ck.keyLen == 0) return true;
+    if (ck.keyLen == 1) return true;
+    if (ck.keyLen == 16) return memcmp(ck.key, kDkBase, 15) == 0;
+    return false;
+}
+
+static void resolveMeshKey(const uint8_t *key, uint8_t keyLen,
+                           uint8_t expanded[16],
+                           const uint8_t *&outKey, uint8_t &outLen) {
+    outKey = key;
+    outLen = keyLen;
+
+    // Meshtastic PSK index 0 (AA==) disables channel encryption.
+    if (keyLen == 1 && key && key[0] == 0x00) {
+        outLen = 0;
+        return;
+    }
+
+    if (keyLen == 1 && key) {
+        expandPsk(key[0], expanded);
+        outKey = expanded;
+        outLen = 16;
+    }
+}
+
+// ── Hop limit ─────────────────────────────────────────────────
+namespace {
+// Seeded from the compiled default so a packet sent before config load still
+// carries something sane.
+uint8_t sMeshHopLimit = (uint8_t)(MESH_HOP_LIMIT & 0x07);
+}
+
+void meshSetHopLimit(uint8_t hops) {
+    sMeshHopLimit = (uint8_t)(hops & 0x07);
+}
+
+uint8_t meshHopLimit() { return sMeshHopLimit; }
+
+uint8_t meshOriginHopFlags(uint8_t extraFlags) {
+    return (uint8_t)(extraFlags | (sMeshHopLimit & 0x07) | ((sMeshHopLimit & 0x07) << 5));
+}
+
+uint8_t meshOriginHopFlagsCapped(uint8_t hops, uint8_t extraFlags) {
+    uint8_t h = (uint8_t)(hops & 0x07);
+    if (h > sMeshHopLimit) h = sMeshHopLimit;
+    return (uint8_t)(extraFlags | h | (uint8_t)(h << 5));
+}
+
+uint8_t meshOriginHopFlagsForChannel(int chanIdx, uint8_t extraFlags) {
+    if (chanIdx >= 0 && chanIdx < MAX_CHANNELS) {
+        const uint8_t p1 = CHANNEL_KEYS[chanIdx].hopLimitPlus1;
+        if (chanHopLimitSet(p1)) {
+            const uint8_t h = chanHopLimitGet(p1);
+            return (uint8_t)(extraFlags | h | (uint8_t)(h << 5));
+        }
+    }
+    return meshOriginHopFlags(extraFlags);
+}
+
+uint8_t computeChannelHash(const char *name, const uint8_t *key, uint8_t keyLen) {
+    uint8_t exp[16];
+    const uint8_t *k = key;
+    uint8_t kl = keyLen;
+    resolveMeshKey(key, keyLen, exp, k, kl);
+    uint8_t h = 0;
+    for (const char *p = name; *p; p++) h ^= (uint8_t)*p;
+    for (int i = 0; i < kl; i++) h ^= k[i];
+    return h;
+}
+
+// ── Channel key table ─────────────────────────────────────────
+// 1-byte PSK keys are stored as a single byte and expanded at runtime via expandPsk().
+// role: 0=PRIMARY, 1=SECONDARY, 2=DISABLED
+// camillia chat server: 3 store slots + the discovery slot, all disabled until
+// radio_link fills them from settings (see VENDORED.md).
+ChannelKey CHANNEL_KEYS[MAX_CHANNELS] = {
+    { "", { 0 }, 0, 0xFF, {}, 2, false, false, false, false },
+    { "", { 0 }, 0, 0xFF, {}, 2, false, false, false, false },
+    { "", { 0 }, 0, 0xFF, {}, 2, false, false, false, false },
+    { "", { 0 }, 0, 0xFF, {}, 2, false, false, false, false },
+};
+
+// ── Protobuf helpers ──────────────────────────────────────────
+size_t pbReadVarint(const uint8_t *buf, size_t len, size_t off, uint64_t &val) {
+    val = 0;
+    int shift = 0;
+    while (off < len) {
+        uint8_t b = buf[off++];
+        val |= (uint64_t)(b & 0x7F) << shift;
+        shift += 7;
+        if (!(b & 0x80)) return off;
+    }
+    return 0;
+}
+
+static size_t pbSkip(const uint8_t *buf, size_t len, size_t i, int wtype) {
+    if (wtype == 0) { uint64_t v; return pbReadVarint(buf, len, i, v); }
+    if (wtype == 1) return i + 8;
+    if (wtype == 5) return i + 4;
+    if (wtype == 2) {
+        uint64_t sz; size_t j = pbReadVarint(buf, len, i, sz);
+        return j ? j + sz : 0;
+    }
+    return 0;
+}
+
+bool decodeData(const uint8_t *buf, size_t len,
+                uint32_t &portnum, const uint8_t *&payPtr, size_t &payLen,
+                uint32_t &requestId, bool &wantResponse,
+                uint32_t *destNode, bool *hasDestNode,
+                uint32_t *sourceNode, bool *hasSourceNode,
+                const uint8_t **signature) {
+    portnum = 0; payPtr = nullptr; payLen = 0; requestId = 0; wantResponse = false;
+    if (destNode) *destNode = 0;
+    if (sourceNode) *sourceNode = 0;
+    if (hasDestNode) *hasDestNode = false;
+    if (hasSourceNode) *hasSourceNode = false;
+    if (signature) *signature = nullptr;
+    size_t i = 0;
+    while (i < len) {
+        uint64_t tag; i = pbReadVarint(buf, len, i, tag); if (!i) break;
+        uint32_t field = tag >> 3, wtype = tag & 7;
+        if (wtype == 0) {
+            uint64_t v; i = pbReadVarint(buf, len, i, v); if (!i) break;
+            if (field == 1) portnum = (uint32_t)v;
+            else if (field == 3) wantResponse = (v != 0);
+            else if (field == 6) requestId = (uint32_t)v;   // request_id varint (Meshtastic standard)
+            else if (field == 4 && destNode) {
+                *destNode = (uint32_t)v;
+                if (hasDestNode) *hasDestNode = true;
+            } else if (field == 5 && sourceNode) {
+                *sourceNode = (uint32_t)v;
+                if (hasSourceNode) *hasSourceNode = true;
+            }
+        } else if (wtype == 2) {
+            uint64_t sz; i = pbReadVarint(buf, len, i, sz); if (!i) break;
+            if (field == 2) { payPtr = buf + i; payLen = (size_t)sz; }
+            else if (field == 10 && signature && sz == XEDDSA_SIGNATURE_BYTES) {
+                *signature = buf + i;
+            }
+            i += sz;
+        } else if (wtype == 5) {
+            // fixed32 — fields 4=dest, 5=source, 6=request_id, 7=reply_id, 8=emoji
+            if (i + 4 <= len) {
+                uint32_t v; memcpy(&v, buf + i, 4);
+                if (field == 6) requestId = v;
+                else if (field == 4 && destNode) {
+                    *destNode = v;
+                    if (hasDestNode) *hasDestNode = true;
+                } else if (field == 5 && sourceNode) {
+                    *sourceNode = v;
+                    if (hasSourceNode) *hasSourceNode = true;
+                }
+            }
+            i += 4;
+        } else { i = pbSkip(buf, len, i, wtype); if (!i) break; }
+    }
+    return true;
+}
+
+bool decodeUser(const uint8_t *buf, size_t len, UserInfo &out) {
+    out.longName[0] = out.shortName[0] = '\0';
+    memset(out.pubKey, 0, 32);
+    out.hasPubKey = false;
+    size_t i = 0;
+    while (i < len) {
+        uint64_t tag; i = pbReadVarint(buf, len, i, tag); if (!i) break;
+        uint32_t field = tag >> 3, wtype = tag & 7;
+        if (wtype == 2) {
+            uint64_t sz; i = pbReadVarint(buf, len, i, sz); if (!i) break;
+            if (i + sz > len) break;
+            if (field == 2 && sz > 0) {
+                size_t copy = min((size_t)sz, sizeof(out.longName) - 1);
+                while (copy > 0 && ((buf[i + copy] & 0xC0u) == 0x80u)) copy--;
+                memcpy(out.longName, buf + i, copy);
+                out.longName[copy] = '\0';
+            } else if (field == 3 && sz > 0) {
+                size_t copy = min((size_t)sz, sizeof(out.shortName) - 1);
+                while (copy > 0 && ((buf[i + copy] & 0xC0u) == 0x80u)) copy--;
+                memcpy(out.shortName, buf + i, copy);
+                out.shortName[copy] = '\0';
+            } else if (field == 8 && sz == 32) {
+                memcpy(out.pubKey, buf + i, 32);
+                out.hasPubKey = true;
+            }
+            i += sz;
+        } else { i = pbSkip(buf, len, i, wtype); if (!i) break; }
+    }
+    return true;
+}
+
+bool decodePosition(const uint8_t *buf, size_t len, PositionInfo &out) {
+    out.latI = out.lonI = out.alt = 0;
+    // Legacy compatibility: older builds encoded lat/lon as sint32 varints.
+    auto unzz = [](uint32_t v) -> int32_t {
+        return (int32_t)((v >> 1) ^ (uint32_t)-(int32_t)(v & 1));
+    };
+    size_t i = 0;
+    while (i < len) {
+        uint64_t tag; i = pbReadVarint(buf, len, i, tag); if (!i) break;
+        uint32_t field = tag >> 3, wtype = tag & 7;
+        if (wtype == 5) {
+            // Current Meshtastic Position.latitude_i/longitude_i are sfixed32.
+            if (i + 4 > len) break;
+            uint32_t v = (uint32_t)buf[i]
+                       | ((uint32_t)buf[i + 1] << 8)
+                       | ((uint32_t)buf[i + 2] << 16)
+                       | ((uint32_t)buf[i + 3] << 24);
+            if (field == 1) out.latI = (int32_t)v;
+            else if (field == 2) out.lonI = (int32_t)v;
+            else if (field == 3) out.alt  = (int32_t)v;
+            i += 4;
+        } else if (wtype == 0) {
+            uint64_t v; i = pbReadVarint(buf, len, i, v); if (!i) break;
+            if (field == 1) out.latI = unzz((uint32_t)v);
+            else if (field == 2) out.lonI = unzz((uint32_t)v);
+            else if (field == 3) out.alt  = (int32_t)(uint32_t)v;
+        } else { i = pbSkip(buf, len, i, wtype); if (!i) break; }
+    }
+    return true;
+}
+
+bool decodeTelemetry(const uint8_t *buf, size_t len, TelemetryInfo &out) {
+    // Telemetry.device_metrics = field 2 (legacy senders may use 1)
+    // Telemetry.environment_metrics = field 3
+    out = {0, 0, 0, 0, 0, 0, 0, false, false, false};
+    size_t i = 0;
+    while (i < len) {
+        uint64_t tag; i = pbReadVarint(buf, len, i, tag); if (!i) break;
+        uint32_t field = tag >> 3, wtype = tag & 7;
+        if (wtype == 2 && (field == 1 || field == 2)) {
+            // DeviceMetrics submessage
+            uint64_t sz; i = pbReadVarint(buf, len, i, sz); if (!i) break;
+            const uint8_t *dm = buf + i; size_t dmLen = sz; i += sz;
+            size_t j = 0;
+            while (j < dmLen) {
+                uint64_t t2; j = pbReadVarint(dm, dmLen, j, t2); if (!j) break;
+                uint32_t f2 = t2 >> 3, w2 = t2 & 7;
+                if (w2 == 0) {
+                    uint64_t v; j = pbReadVarint(dm, dmLen, j, v); if (!j) break;
+                    if (f2 == 1) out.battPct = (float)v;
+                } else if (w2 == 5) {
+                    if (j + 4 <= dmLen) {
+                        float fv; memcpy(&fv, dm + j, 4);
+                        if (f2 == 2) out.voltage = fv;
+                        else if (f2 == 3) out.chUtil  = fv;
+                        else if (f2 == 4) out.airUtil = fv;
+                    }
+                    j += 4;
+                } else { j = pbSkip(dm, dmLen, j, w2); if (!j) break; }
+            }
+            out.hasDeviceMetrics = true;
+        } else if (wtype == 2 && field == 3) {
+            // EnvironmentMetrics submessage
+            uint64_t sz; i = pbReadVarint(buf, len, i, sz); if (!i) break;
+            const uint8_t *em = buf + i; size_t emLen = sz; i += sz;
+            size_t j = 0;
+            while (j < emLen) {
+                uint64_t t2; j = pbReadVarint(em, emLen, j, t2); if (!j) break;
+                uint32_t f2 = t2 >> 3, w2 = t2 & 7;
+                if (w2 == 5) {
+                    if (j + 4 <= emLen) {
+                        float fv; memcpy(&fv, em + j, 4);
+                        if (f2 == 1) out.temperatureC = fv;
+                        else if (f2 == 2) out.humidityPct = fv;
+                        else if (f2 == 3) out.pressureHpa = fv;
+                    }
+                    j += 4;
+                } else {
+                    j = pbSkip(em, emLen, j, w2); if (!j) break;
+                }
+            }
+            out.hasEnvironmentMetrics = true;
+        } else { i = pbSkip(buf, len, i, wtype); if (!i) break; }
+    }
+    out.valid = out.hasDeviceMetrics || out.hasEnvironmentMetrics;
+    return true;
+}
+
+bool decodeMeshBeacon(const uint8_t *buf, size_t len, MeshBeaconPayload &out) {
+    memset(&out, 0, sizeof(out));
+    size_t i = 0;
+
+    // ChannelSettings submessage: we want name (field 3) and psk (field 2).
+    // channel_num and the uplink/downlink flags describe how the *sender's*
+    // mesh is arranged and are not ours to act on.
+    auto parseOfferChannel = [&](const uint8_t *sub, size_t subLen) {
+        size_t j = 0;
+        while (j < subLen) {
+            uint64_t tag = 0;
+            j = pbReadVarint(sub, subLen, j, tag);
+            if (!j) return;
+            const uint32_t f = (uint32_t)(tag >> 3);
+            const uint32_t wt = (uint32_t)(tag & 7);
+            if (wt == 2) {
+                uint64_t sz = 0;
+                size_t k = pbReadVarint(sub, subLen, j, sz);
+                if (!k || k + sz > subLen) return;
+                if (f == 2) {                       // psk
+                    size_t n = (size_t)sz;
+                    if (n > sizeof(out.offerPsk)) n = sizeof(out.offerPsk);
+                    memcpy(out.offerPsk, sub + k, n);
+                    out.offerPskLen = (uint8_t)n;
+                } else if (f == 3) {                // name
+                    size_t n = (size_t)sz;
+                    if (n > sizeof(out.offerChannelName) - 1) n = sizeof(out.offerChannelName) - 1;
+                    memcpy(out.offerChannelName, sub + k, n);
+                    out.offerChannelName[n] = '\0';
+                }
+                j = k + (size_t)sz;
+            } else if (wt == 0) {
+                uint64_t v = 0;
+                j = pbReadVarint(sub, subLen, j, v);
+                if (!j) return;
+            } else if (wt == 5) {
+                if (j + 4 > subLen) return;
+                j += 4;
+            } else if (wt == 1) {
+                if (j + 8 > subLen) return;
+                j += 8;
+            } else {
+                return;
+            }
+        }
+    };
+
+    while (i < len) {
+        uint64_t tag = 0;
+        i = pbReadVarint(buf, len, i, tag);
+        if (!i) break;
+
+        const uint32_t field = (uint32_t)(tag >> 3);
+        const uint32_t wt = (uint32_t)(tag & 7);
+
+        if (wt == 2) {
+            uint64_t sz = 0;
+            size_t j = pbReadVarint(buf, len, i, sz);
+            if (!j || j + sz > len) break;
+            if (field == 1) {                       // message
+                size_t n = (size_t)sz;
+                if (n > sizeof(out.message) - 1) n = sizeof(out.message) - 1;
+                memcpy(out.message, buf + j, n);
+                out.message[n] = '\0';
+            } else if (field == 2) {                // offer_channel
+                out.hasOfferChannel = true;
+                parseOfferChannel(buf + j, (size_t)sz);
+            }
+            i = j + (size_t)sz;
+        } else if (wt == 0) {
+            uint64_t v = 0;
+            i = pbReadVarint(buf, len, i, v);
+            if (!i) break;
+            if (field == 3) {                       // offer_region
+                out.offerRegion = (uint8_t)v;
+            } else if (field == 4) {                // offer_preset
+                out.offerPreset = (uint8_t)v;
+                out.hasOfferPreset = true;
+            }
+        } else if (wt == 5) {
+            if (i + 4 > len) break;
+            i += 4;
+        } else if (wt == 1) {
+            if (i + 8 > len) break;
+            i += 8;
+        } else {
+            break;
+        }
+    }
+
+    // An empty beacon carrying neither text nor an offer says nothing; the same
+    // test Meshtastic's listener applies before caching one.
+    out.valid = out.message[0] != '\0' || out.hasOfferChannel
+             || out.offerRegion != 0 || out.hasOfferPreset;
+    return out.valid;
+}
+
+bool decodeNeighborInfo(const uint8_t *buf, size_t len, NeighborInfoPayload &out) {
+    memset(&out, 0, sizeof(out));
+    size_t i = 0;
+
+    auto readNodeId = [&](const uint8_t *src, size_t srcLen, size_t &off, uint32_t wt, uint32_t &dst) -> bool {
+        if (wt == 0) {
+            uint64_t v = 0;
+            size_t next = pbReadVarint(src, srcLen, off, v);
+            if (!next) return false;
+            off = next;
+            dst = (uint32_t)v;
+            return true;
+        }
+        if (wt == 5) {
+            if (off + 4 > srcLen) return false;
+            uint32_t v = (uint32_t)src[off]
+                       | ((uint32_t)src[off + 1] << 8)
+                       | ((uint32_t)src[off + 2] << 16)
+                       | ((uint32_t)src[off + 3] << 24);
+            off += 4;
+            dst = v;
+            return true;
+        }
+        return false;
+    };
+
+    while (i < len) {
+        uint64_t tag = 0;
+        i = pbReadVarint(buf, len, i, tag);
+        if (!i) break;
+
+        uint32_t field = (uint32_t)(tag >> 3);
+        uint32_t wt = (uint32_t)(tag & 7);
+
+        if (field == 1) {
+            if (!readNodeId(buf, len, i, wt, out.nodeId)) break;
+        } else if (field == 2) {
+            if (!readNodeId(buf, len, i, wt, out.lastSentById)) break;
+        } else if (field == 3 && wt == 0) {
+            uint64_t v = 0;
+            i = pbReadVarint(buf, len, i, v);
+            if (!i) break;
+            out.nodeBroadcastIntervalS = (uint32_t)v;
+        } else if (field == 4 && wt == 2) {
+            uint64_t sz = 0;
+            size_t j = pbReadVarint(buf, len, i, sz);
+            if (!j) break;
+            if (j + sz > len) break;
+
+            if (out.neighborCount < MESH_NEIGHBOR_MAX) {
+                NeighborEdgeInfo edge = {};
+                size_t k = j;
+                size_t kEnd = j + (size_t)sz;
+                while (k < kEnd) {
+                    uint64_t t2 = 0;
+                    k = pbReadVarint(buf, kEnd, k, t2);
+                    if (!k) break;
+
+                    uint32_t f2 = (uint32_t)(t2 >> 3);
+                    uint32_t w2 = (uint32_t)(t2 & 7);
+                    if (f2 == 1) {
+                        if (!readNodeId(buf, kEnd, k, w2, edge.nodeId)) break;
+                    } else if (f2 == 2 && w2 == 5) {
+                        if (k + 4 > kEnd) break;
+                        memcpy(&edge.snr, buf + k, 4);
+                        k += 4;
+                    } else if (f2 == 3) {
+                        if (!readNodeId(buf, kEnd, k, w2, edge.lastRxTime)) break;
+                    } else if (f2 == 4) {
+                        if (!readNodeId(buf, kEnd, k, w2, edge.nodeBroadcastIntervalS)) break;
+                    } else {
+                        k = pbSkip(buf, kEnd, k, w2);
+                        if (!k) break;
+                    }
+                }
+                if (edge.nodeId != 0) {
+                    out.neighbors[out.neighborCount++] = edge;
+                }
+            }
+
+            i = j + (size_t)sz;
+        } else {
+            i = pbSkip(buf, len, i, wt);
+            if (!i) break;
+        }
+    }
+
+    return true;
+}
+
+// ── AES-CTR core ─────────────────────────────────────────────
+static bool aesCtr(const uint8_t *key, uint8_t keyLen,
+                   uint32_t packetId, uint32_t fromNode,
+                   const uint8_t *in, uint8_t *out, size_t len) {
+    uint8_t nonce[16] = {0};
+    memcpy(nonce,     &packetId, 4);
+    memcpy(nonce + 8, &fromNode, 4);
+
+    mbedtls_aes_context ctx;
+    mbedtls_aes_init(&ctx);
+    int bits = (keyLen == 32) ? 256 : 128;
+    if (mbedtls_aes_setkey_enc(&ctx, key, bits) != 0) {
+        mbedtls_aes_free(&ctx); return false;
+    }
+    size_t nc_off = 0; uint8_t stream[16] = {0};
+    bool ok = (mbedtls_aes_crypt_ctr(&ctx, len, &nc_off, nonce, stream, in, out) == 0);
+    mbedtls_aes_free(&ctx);
+    return ok;
+}
+
+// Returns true if plain looks like a valid Meshtastic Data protobuf.
+static bool looksLikeData(const uint8_t *plain, size_t len) {
+    if (len < 2) return false;
+    // Expect field 1 or 2 as first tag; wire types 0 (varint) or 2 (len-delim)
+    uint8_t tag = plain[0];
+    if (tag == 0 || tag == 0xFF) return false;
+    int wtype = tag & 0x07;
+    if (wtype > 5) return false;
+    // Try to decode portnum (field 1, varint) to verify it's a known port
+    uint32_t portnum = 0; const uint8_t *payPtr = nullptr; size_t payLen = 0;
+    uint32_t reqId = 0; bool wantResp = false;
+    decodeData(plain, len, portnum, payPtr, payLen, reqId, wantResp);
+    // Accept known ports or any non-zero port up to 1024
+    return portnum > 0 && portnum <= 1024;
+}
+
+int decryptPacket(const MeshHdr &hdr, const uint8_t *cipher,
+                  uint8_t *plain, size_t len) {
+    auto tryDecrypt = [&](int i) -> bool {
+        uint8_t exp[16];
+        const uint8_t *keyPtr = CHANNEL_KEYS[i].key;
+        uint8_t keyLen = CHANNEL_KEYS[i].keyLen;
+        resolveMeshKey(CHANNEL_KEYS[i].key, CHANNEL_KEYS[i].keyLen, exp, keyPtr, keyLen);
+        if (keyLen == 0) {
+            memcpy(plain, cipher, len);
+        } else {
+            if (!aesCtr(keyPtr, keyLen, hdr.id, hdr.from, cipher, plain, len)) return false;
+        }
+        return looksLikeData(plain, len);
+    };
+
+    // Pass 1: try the channel whose hash matches hdr.channel
+    for (int i = 0; i < MAX_CHANNELS; i++) {
+        if (CHANNEL_KEYS[i].hash != hdr.channel) continue;
+        if (tryDecrypt(i)) return i;
+    }
+    // Pass 2: fall back — try all keys (handles unknown/unregistered channels)
+    for (int i = 0; i < MAX_CHANNELS; i++) {
+        if (CHANNEL_KEYS[i].hash == hdr.channel) continue; // already tried
+        if (tryDecrypt(i)) return i;
+    }
+    return -1;
+}
+
+bool encryptPayload(uint32_t packetId, uint32_t fromNode,
+                    const uint8_t *key, uint8_t keyLen,
+                    const uint8_t *plain, uint8_t *cipher, size_t len) {
+    uint8_t exp[16];
+    resolveMeshKey(key, keyLen, exp, key, keyLen);
+    if (keyLen == 0) { memcpy(cipher, plain, len); return true; }
+    return aesCtr(key, keyLen, packetId, fromNode, plain, cipher, len);
+}
+
+// ── PKI (Curve25519) encryption ───────────────────────────────
+// Meshtastic wire format: [ciphertext(N)] [CCM-tag(8)] [extraNonce(4)]
+// Nonce (8 bytes): [packetId_LE32(4)] [extraNonce_LE(4)]
+// Key: SHA256(ECDH(myPrivKey, recipientPubKey))
+// Caller sets hdr.channel = 0 to signal PKI to receiving nodes.
+static bool derivePkiAesKey(const uint8_t *remotePubKey, uint8_t outAesKey[32]) {
+    if (!remotePubKey) return false;
+
+    uint8_t sharedKey[32];
+    uint8_t localPriv[32];
+    memcpy(sharedKey, remotePubKey, 32);
+    memcpy(localPriv, myPrivKey, 32);
+
+    // Match Meshtastic firmware behavior (Curve25519::dh2 + SHA256).
+    if (!Curve25519::dh2(sharedKey, localPriv)) {
+        return false;
+    }
+
+    mbedtls_sha256(sharedKey, 32, outAesKey, 0);
+    return true;
+}
+
+bool encryptPki(uint32_t packetId, uint32_t fromNode,
+                const uint8_t *recipientPubKey,
+                const uint8_t *plain, size_t plainLen,
+                uint8_t *out) {
+    bool ok = false;
+    int step = 0;
+    do {
+        uint8_t aesKey[32];
+    if (!derivePkiAesKey(recipientPubKey, aesKey)) { step = 1; break; }
+
+        uint32_t extraNonce;
+        esp_fill_random(&extraNonce, sizeof(extraNonce));
+
+        // 13-byte nonce: [packetId_LE32][extraNonce_LE32][fromNode_LE32][0x00]
+        uint8_t nonce[13] = {};
+        memcpy(nonce,     &packetId,   4);
+        memcpy(nonce + 4, &extraNonce, 4);
+        memcpy(nonce + 8, &fromNode,   4);
+
+        mbedtls_ccm_context ccm;
+        mbedtls_ccm_init(&ccm);
+        int ret = mbedtls_ccm_setkey(&ccm, MBEDTLS_CIPHER_ID_AES, aesKey, 256);
+        if (ret != 0) { step=2; mbedtls_ccm_free(&ccm); break; }
+        uint8_t tag[8];
+        ret = mbedtls_ccm_encrypt_and_tag(&ccm, plainLen,
+                                           nonce, sizeof(nonce),
+                                           nullptr, 0,
+                                           plain, out,
+                                           tag, sizeof(tag));
+        mbedtls_ccm_free(&ccm);
+        if (ret != 0) { step=3; break; }
+
+        memcpy(out + plainLen,     tag,         8);
+        memcpy(out + plainLen + 8, &extraNonce, 4);
+        ok = true;
+    } while (false);
+
+    if (!ok) debugLogMessages("[pki] encryptPki failed at step %d\n", step);
+    return ok;
+}
+
+uint32_t nextMeshPacketId() {
+    static uint32_t sNextId = 0;
+    if (sNextId == 0) {
+        uint32_t seed = 0;
+        esp_fill_random(&seed, sizeof(seed));
+        if (seed == 0) seed = 1;
+        sNextId = seed;
+    }
+
+    sNextId++;
+    if (sNextId == 0) sNextId = 1;
+    return sNextId;
+}
+
+// ── PKI decrypt ───────────────────────────────────────────────
+// Wire format: [ciphertext(N)] [CCM-tag(8)] [extraNonce(4)]
+// Nonce (13 bytes): [packetId_LE32(4)] [extraNonce_LE32(4)] [fromNode_LE32(4)] [0x00]
+bool decryptPki(const MeshHdr &hdr, const uint8_t *cipher, size_t cipherLen,
+                const uint8_t *senderPubKey, uint8_t *plain, size_t &plainLen) {
+    if (cipherLen < 13) return false;   // need at least 1 byte of plaintext + 12 overhead
+
+    plainLen = cipherLen - 12;
+    const uint8_t *ciphertext = cipher;
+    const uint8_t *tag        = cipher + plainLen;      // tag[8]
+    uint32_t extraNonce;
+    memcpy(&extraNonce, cipher + plainLen + 8, 4);      // extraNonce[4]
+
+    bool ok = false;
+    int step = 0;
+    do {
+        uint8_t aesKey[32];
+        if (!derivePkiAesKey(senderPubKey, aesKey)) { step = 1; break; }
+
+        // 13-byte nonce: [packetId_LE32][extraNonce_LE32][fromNode_LE32][0x00]
+        uint8_t nonce[13] = {};
+        memcpy(nonce,     &hdr.id,   4);
+        memcpy(nonce + 4, &extraNonce, 4);
+        memcpy(nonce + 8, &hdr.from, 4);
+
+        mbedtls_ccm_context ccm;
+        mbedtls_ccm_init(&ccm);
+        int ret = mbedtls_ccm_setkey(&ccm, MBEDTLS_CIPHER_ID_AES, aesKey, 256);
+        if (ret != 0) { step=2; mbedtls_ccm_free(&ccm); break; }
+        ret = mbedtls_ccm_auth_decrypt(&ccm, plainLen,
+                                        nonce, sizeof(nonce),
+                                        nullptr, 0,
+                                        ciphertext, plain,
+                                        tag, 8);
+        mbedtls_ccm_free(&ccm);
+        if (ret != 0) { step=3; break; }
+        ok = true;
+    } while (false);
+
+    if (!ok) debugLogMessages("[pki] decryptPki failed at step %d\n", step);
+    return ok;
+}
+
+// ── Protobuf encoder ──────────────────────────────────────────
+static size_t pbWriteVarint(uint8_t *buf, uint64_t val) {
+    size_t n = 0;
+    do {
+        buf[n] = (val & 0x7F) | (val > 0x7F ? 0x80 : 0);
+        val >>= 7; n++;
+    } while (val);
+    return n;
+}
+
+// Appends Data.bitfield (field 9) and returns the new length, or 0 if it would
+// not fit. Written unconditionally, *including when the value is zero*.
+//
+// Meshtastic 2.8 uses the presence of this field to tell a genuine zero-hop
+// broadcast from pre-2.3.0 firmware that never populated hop_start: NodeDB::
+// classifyHopStart() marks a packet with hop_start == 0 and no bitfield
+// MISSING_OR_UNKNOWN, which keeps it out of module processing, the phone, MQTT
+// and rebroadcast. A node with OK-to-MQTT off and a hop limit of 0 -- both
+// legitimate settings here -- would otherwise have every packet it originates
+// silently discarded by every 2.8 node in range.
+//
+// The zero case costs two bytes and must still be emitted. Fixture, so a
+// regression is recognisable from a packet capture without re-deriving it:
+//
+//   tag  = (9 << 3) | 0 (varint) = 0x48
+//   zero = one varint byte       = 0x00
+//
+// so encodePositionRequest() with bitfield 0 must produce exactly
+//
+//   08 03    Data.portnum   = 3 (POSITION_APP)
+//   12 00    Data.payload   = empty Position
+//   18 01    Data.want_response = true
+//   48 00    Data.bitfield  = 0        <-- present, not omitted
+//
+// A build that emits the first six bytes and stops is the bug this exists to
+// prevent. Do not optimise the zero case back out.
+static size_t pbWriteDataBitfield(uint8_t *buf, size_t n, size_t bufLen, uint32_t bitfield) {
+    if (n + 6 > bufLen) return 0;
+    n += pbWriteVarint(buf + n, (9 << 3) | 0);
+    n += pbWriteVarint(buf + n, bitfield);
+    return n;
+}
+
+size_t encodeTextMessage(const char *text, uint8_t *buf, size_t bufLen,
+                         uint32_t bitfield, uint32_t replyId, uint32_t emoji) {
+    size_t n = 0;
+    size_t textLen = strlen(text);
+    if (textLen > MESH_TEXT_MAX_LEN) return 0;
+    // field 1 (portnum = TEXT_MESSAGE_APP = 1), varint
+    n += pbWriteVarint(buf + n, (1 << 3) | 0);
+    n += pbWriteVarint(buf + n, TEXT_MESSAGE_APP);
+    // field 2 (payload), length-delimited
+    n += pbWriteVarint(buf + n, (2 << 3) | 2);
+    n += pbWriteVarint(buf + n, textLen);
+    if (n + textLen > bufLen) return 0;
+    memcpy(buf + n, text, textLen);
+    n += textLen;
+    // field 7 (reply_id), fixed32
+    if (replyId) {
+        if (n + 5 > bufLen) return 0;
+        buf[n++] = (7 << 3) | 5;
+        memcpy(buf + n, &replyId, 4);
+        n += 4;
+    }
+    // field 8 (emoji), fixed32 — non-zero marks this message as a tapback reaction.
+    // Data.emoji is fixed32 in mesh.proto, like reply_id; writing it as a varint
+    // makes nanopb reject the whole Data message, so stock firmware drops the
+    // packet outright rather than just ignoring the reaction.
+    if (emoji) {
+        if (n + 5 > bufLen) return 0;
+        buf[n++] = (8 << 3) | 5;
+        memcpy(buf + n, &emoji, 4);
+        n += 4;
+    }
+    n = pbWriteDataBitfield(buf, n, bufLen, bitfield);
+    if (n == 0) return 0;
+    return n;
+}
+
+size_t encodeAdminData(const uint8_t *admin, size_t adminLen,
+                       uint32_t fromNode, uint32_t toNode, bool wantResponse,
+                       uint8_t *buf, size_t bufLen) {
+    if (!admin || !adminLen || !buf) return 0;
+    size_t n = 0;
+
+    // field 1: portnum
+    n += pbWriteVarint(buf + n, (1 << 3) | 0);
+    n += pbWriteVarint(buf + n, ADMIN_APP);
+
+    // field 2: payload
+    n += pbWriteVarint(buf + n, (2 << 3) | 2);
+    n += pbWriteVarint(buf + n, adminLen);
+    if (n + adminLen > bufLen) return 0;
+    memcpy(buf + n, admin, adminLen);
+    n += adminLen;
+
+    // field 3: want_response. Reads set it; a write is answered by a routing ACK
+    // rather than an admin reply, so asking for one there would be a request the
+    // far end is never going to satisfy.
+    if (wantResponse) {
+        if (n + 2 > bufLen) return 0;
+        n += pbWriteVarint(buf + n, (3 << 3) | 0);
+        n += pbWriteVarint(buf + n, 1);
+    }
+
+    if (n + 10 > bufLen) return 0;
+    // field 4: dest, fixed32
+    buf[n++] = (4 << 3) | 5;
+    memcpy(buf + n, &toNode, 4); n += 4;
+    // field 5: source, fixed32
+    buf[n++] = (5 << 3) | 5;
+    memcpy(buf + n, &fromNode, 4); n += 4;
+
+    return n;
+}
+
+size_t encodeTextMessageUnicast(const char *text,
+                                uint32_t fromNode, uint32_t toNode,
+                                uint8_t *buf, size_t bufLen,
+                                uint32_t replyId, uint32_t emoji) {
+    size_t n = encodeTextMessage(text, buf, bufLen, 0, replyId, emoji);
+    if (n == 0) return 0;
+    if (n + 10 > bufLen) return 0;
+
+    // Data field 4 (dest), fixed32
+    buf[n++] = (4 << 3) | 5;
+    memcpy(buf + n, &toNode, 4); n += 4;
+
+    // Data field 5 (source), fixed32
+    buf[n++] = (5 << 3) | 5;
+    memcpy(buf + n, &fromNode, 4); n += 4;
+
+    return n;
+}
+
+size_t encodeNodeInfo(uint32_t nodeId, const char *longName,
+                      const char *shortName, const uint8_t *mac6,
+                      uint8_t *buf, size_t bufLen,
+                      bool wantResponse, uint32_t bitfield) {
+    // Build inner User message (extra 34 bytes for field 8 = public_key)
+    uint8_t user[164]; size_t u = 0;
+
+    char idStr[12]; snprintf(idStr, sizeof(idStr), "!%08x", nodeId);
+    size_t idLen = strlen(idStr);
+    u += pbWriteVarint(user + u, (1 << 3) | 2);
+    u += pbWriteVarint(user + u, idLen);
+    memcpy(user + u, idStr, idLen); u += idLen;
+
+    size_t lnLen = strlen(longName);
+    u += pbWriteVarint(user + u, (2 << 3) | 2);
+    u += pbWriteVarint(user + u, lnLen);
+    memcpy(user + u, longName, lnLen); u += lnLen;
+
+    size_t snLen = strlen(shortName);
+    u += pbWriteVarint(user + u, (3 << 3) | 2);
+    u += pbWriteVarint(user + u, snLen);
+    memcpy(user + u, shortName, snLen); u += snLen;
+
+    u += pbWriteVarint(user + u, (4 << 3) | 2);
+    u += pbWriteVarint(user + u, 6);
+    memcpy(user + u, mac6, 6); u += 6;
+
+    u += pbWriteVarint(user + u, (5 << 3) | 0);
+    u += pbWriteVarint(user + u, MY_HW_MODEL);
+
+    // field 6 = is_licensed: omit (defaults to false).
+    // Official Meshtastic firmware STRIPS the public key when is_licensed=true,
+    // so setting it here would break PKI DMs with standard nodes.
+
+    // field 7 = role (Config.DeviceConfig.Role varint).
+    if (myDeviceRole != 0) {  // CLIENT (0) is proto default, omit to save bytes
+        u += pbWriteVarint(user + u, (7 << 3) | 0);
+        u += pbWriteVarint(user + u, myDeviceRole);
+    }
+
+    // field 8 = public_key (bytes, 32 bytes).  Advertise our Curve25519 public key so
+    // other nodes can encrypt PKI DMs to us, and so we can encrypt DMs to them.
+    // Only include if key is non-zero (i.e. key generation succeeded).
+    bool pubKeyValid = false;
+    for (int i = 0; i < 32; i++) { if (myPubKey[i]) { pubKeyValid = true; break; } }
+    if (pubKeyValid && u + 35 <= sizeof(user)) {
+        u += pbWriteVarint(user + u, (8 << 3) | 2);
+        u += pbWriteVarint(user + u, 32);
+        memcpy(user + u, myPubKey, 32); u += 32;
+    }
+    debugLogMessages("[nodeinfo] encode: pubKey=%s  user=%u bytes\n",
+                     pubKeyValid ? "YES" : "NO", (unsigned)u);
+
+    // Wrap in Data message
+    size_t n = 0;
+    n += pbWriteVarint(buf + n, (1 << 3) | 0);
+    n += pbWriteVarint(buf + n, NODEINFO_APP);
+    n += pbWriteVarint(buf + n, (2 << 3) | 2);
+    n += pbWriteVarint(buf + n, u);
+    if (n + u > bufLen) return 0;
+    memcpy(buf + n, user, u); n += u;
+    if (wantResponse) {
+        // want_response = true: causes receiving nodes to reply with their own NODEINFO
+        n += pbWriteVarint(buf + n, (3 << 3) | 0);  // field 3, varint
+        n += pbWriteVarint(buf + n, 1);              // true
+    }
+    n = pbWriteDataBitfield(buf, n, bufLen, bitfield);
+    if (n == 0) return 0;
+    return n;
+}
+
+size_t encodeSharedNodeInfo(uint32_t nodeId, const char *longName,
+                            const char *shortName, const uint8_t *pubKey32,
+                            uint8_t *buf, size_t bufLen) {
+    if (!longName) longName = "";
+    if (!shortName) shortName = "";
+    uint8_t user[164]; size_t u = 0;
+
+    // User: id (1), long_name (2), short_name (3), public_key (8). The same
+    // fields and order encodeNodeInfo() writes, less the ones that describe
+    // the device sending it.
+    char idStr[12]; snprintf(idStr, sizeof(idStr), "!%08x", nodeId);
+    const size_t idLen = strlen(idStr);
+    size_t lnLen = strlen(longName);
+    if (lnLen > 39) lnLen = 39;
+    size_t snLen = strlen(shortName);
+    if (snLen > 4) snLen = 4;
+
+    u += pbWriteVarint(user + u, (1 << 3) | 2);
+    u += pbWriteVarint(user + u, idLen);
+    memcpy(user + u, idStr, idLen); u += idLen;
+    u += pbWriteVarint(user + u, (2 << 3) | 2);
+    u += pbWriteVarint(user + u, lnLen);
+    memcpy(user + u, longName, lnLen); u += lnLen;
+    u += pbWriteVarint(user + u, (3 << 3) | 2);
+    u += pbWriteVarint(user + u, snLen);
+    memcpy(user + u, shortName, snLen); u += snLen;
+    if (pubKey32 && u + 35 <= sizeof(user)) {
+        u += pbWriteVarint(user + u, (8 << 3) | 2);
+        u += pbWriteVarint(user + u, 32);
+        memcpy(user + u, pubKey32, 32); u += 32;
+    }
+
+    size_t n = 0;
+    n += pbWriteVarint(buf + n, (1 << 3) | 0);
+    n += pbWriteVarint(buf + n, NODEINFO_APP);
+    n += pbWriteVarint(buf + n, (2 << 3) | 2);
+    n += pbWriteVarint(buf + n, u);
+    if (n + u > bufLen) return 0;
+    memcpy(buf + n, user, u); n += u;
+    return n;
+}
+
+void applyPositionPrecision(int32_t &latI, int32_t &lonI, uint8_t precisionBits) {
+    if (precisionBits >= 32) return;
+    if (precisionBits == 0) {
+        // Zeroing both would put us on Null Island, which reads as a real fix
+        // to every receiver. "Send nothing" is the caller's decision to make by
+        // not calling at all, so the safe reading of 0 here is "no coarsening".
+        return;
+    }
+
+    // Mask through uint32_t: latI/lonI are signed, and a right-shifted signed
+    // mask would sign-extend into the bits we mean to clear.
+    const uint32_t keep = (uint32_t)0xFFFFFFFFu << (32 - precisionBits);
+    // Half a cell, so the reported point is the centre of the possible area
+    // rather than its corner — the same +1<<(31-precision) Meshtastic adds.
+    const int32_t halfCell = (int32_t)((uint32_t)1u << (31 - precisionBits));
+
+    latI = (int32_t)(((uint32_t)latI & keep)) + halfCell;
+    lonI = (int32_t)(((uint32_t)lonI & keep)) + halfCell;
+}
+
+size_t encodePosition(int32_t latI, int32_t lonI, int32_t alt,
+                      uint8_t *buf, size_t bufLen, uint32_t bitfield,
+                      uint8_t precisionBits) {
+    uint8_t pos[32]; size_t p = 0;
+
+    // Meshtastic Position.latitude_i/longitude_i are sfixed32.
+    auto writeFixed32 = [&](uint32_t field, int32_t value) -> bool {
+        if (p + 5 > sizeof(pos)) return false;
+        pos[p++] = (uint8_t)((field << 3) | 5);
+        uint32_t v = (uint32_t)value;
+        pos[p++] = (uint8_t)(v & 0xFF);
+        pos[p++] = (uint8_t)((v >> 8) & 0xFF);
+        pos[p++] = (uint8_t)((v >> 16) & 0xFF);
+        pos[p++] = (uint8_t)((v >> 24) & 0xFF);
+        return true;
+    };
+
+    if (!writeFixed32(1, latI) || !writeFixed32(2, lonI)) return 0;
+
+    // altitude is int32 — plain varint (two's complement for negatives)
+    if (p + 6 > sizeof(pos)) return 0;
+    p += pbWriteVarint(pos + p, (3 << 3) | 0); p += pbWriteVarint(pos + p, (uint32_t)alt);
+
+    // Position.precision_bits (field 22, varint). Only sent when the coordinate
+    // has actually been coarsened: an exact fix omits it, which is what every
+    // build before imprecise location sent and what stock firmware does too.
+    if (precisionBits > 0 && precisionBits < 32) {
+        if (p + 4 > sizeof(pos)) return 0;
+        p += pbWriteVarint(pos + p, (22 << 3) | 0);
+        p += pbWriteVarint(pos + p, precisionBits);
+    }
+
+    // Wrap in Data message
+    size_t n = 0;
+    n += pbWriteVarint(buf + n, (1 << 3) | 0);
+    n += pbWriteVarint(buf + n, POSITION_APP);
+    n += pbWriteVarint(buf + n, (2 << 3) | 2);
+    n += pbWriteVarint(buf + n, p);
+    if (n + p > bufLen) return 0;
+    memcpy(buf + n, pos, p); n += p;
+    n = pbWriteDataBitfield(buf, n, bufLen, bitfield);
+    if (n == 0) return 0;
+    return n;
+}
+
+size_t encodeTelemetryDevice(uint8_t battPct, float voltage,
+                             float chUtil, float airUtilTx, uint32_t uptimeS,
+                             uint32_t timeEpoch,
+                             uint8_t *buf, size_t bufLen,
+                             uint32_t bitfield) {
+    // Telemetry.oneof variant field 2 = DeviceMetrics
+    uint8_t dev[32];
+    size_t d = 0;
+
+    // DeviceMetrics.battery_level = field 1, varint
+    d += pbWriteVarint(dev + d, (1 << 3) | 0);
+    d += pbWriteVarint(dev + d, battPct);
+
+    // DeviceMetrics.voltage = field 2, fixed32 float
+    if (d + 5 > sizeof(dev)) return 0;
+    dev[d++] = (2 << 3) | 5;
+    memcpy(dev + d, &voltage, 4);
+    d += 4;
+
+    // DeviceMetrics.channel_utilization = field 3, fixed32 float
+    if (d + 5 > sizeof(dev)) return 0;
+    dev[d++] = (3 << 3) | 5;
+    memcpy(dev + d, &chUtil, 4);
+    d += 4;
+
+    // DeviceMetrics.air_util_tx = field 4, fixed32 float
+    if (d + 5 > sizeof(dev)) return 0;
+    dev[d++] = (4 << 3) | 5;
+    memcpy(dev + d, &airUtilTx, 4);
+    d += 4;
+
+    // DeviceMetrics.uptime_seconds = field 5, varint
+    if (d + 6 > sizeof(dev)) return 0;
+    d += pbWriteVarint(dev + d, (5 << 3) | 0);
+    d += pbWriteVarint(dev + d, uptimeS);
+
+    uint8_t telem[40];
+    size_t t = 0;
+
+    // Telemetry.time = field 1, varint (Unix seconds); omitted when unknown.
+    if (timeEpoch) {
+        t += pbWriteVarint(telem + t, (1 << 3) | 0);
+        t += pbWriteVarint(telem + t, timeEpoch);
+    }
+
+    // Telemetry.device_metrics = field 2, length-delimited
+    t += pbWriteVarint(telem + t, (2 << 3) | 2);
+    t += pbWriteVarint(telem + t, d);
+    if (t + d > sizeof(telem)) return 0;
+    memcpy(telem + t, dev, d);
+    t += d;
+
+    // Wrap in Data message
+    size_t n = 0;
+    n += pbWriteVarint(buf + n, (1 << 3) | 0);
+    n += pbWriteVarint(buf + n, TELEMETRY_APP);
+    n += pbWriteVarint(buf + n, (2 << 3) | 2);
+    n += pbWriteVarint(buf + n, t);
+    if (n + t > bufLen) return 0;
+    memcpy(buf + n, telem, t);
+    n += t;
+
+    n = pbWriteDataBitfield(buf, n, bufLen, bitfield);
+    if (n == 0) return 0;
+
+    return n;
+}
+
+size_t encodeTelemetryEnvironment(float temperatureC, float humidityPct, float pressureHpa,
+                                  uint32_t timeEpoch,
+                                  uint8_t *buf, size_t bufLen,
+                                  uint32_t bitfield) {
+    // Telemetry.oneof variant field 3 = EnvironmentMetrics
+    uint8_t env[24];
+    size_t e = 0;
+
+    auto writeFloatField = [&](uint8_t field, float value) -> bool {
+        if (e + 5 > sizeof(env)) return false;
+        env[e++] = (uint8_t)((field << 3) | 5);
+        memcpy(env + e, &value, 4);
+        e += 4;
+        return true;
+    };
+
+    // EnvironmentMetrics.temperature = 1
+    // EnvironmentMetrics.relative_humidity = 2
+    // EnvironmentMetrics.barometric_pressure = 3
+    if (!writeFloatField(1, temperatureC)) return 0;
+    if (!writeFloatField(2, humidityPct)) return 0;
+    if (!writeFloatField(3, pressureHpa)) return 0;
+
+    uint8_t telem[40];
+    size_t t = 0;
+
+    // Telemetry.time = field 1, varint (Unix seconds); omitted when unknown.
+    if (timeEpoch) {
+        t += pbWriteVarint(telem + t, (1 << 3) | 0);
+        t += pbWriteVarint(telem + t, timeEpoch);
+    }
+
+    // Telemetry.environment_metrics = field 3, length-delimited
+    t += pbWriteVarint(telem + t, (3 << 3) | 2);
+    t += pbWriteVarint(telem + t, e);
+    if (t + e > sizeof(telem)) return 0;
+    memcpy(telem + t, env, e);
+    t += e;
+
+    // Wrap in Data message
+    size_t n = 0;
+    n += pbWriteVarint(buf + n, (1 << 3) | 0);
+    n += pbWriteVarint(buf + n, TELEMETRY_APP);
+    n += pbWriteVarint(buf + n, (2 << 3) | 2);
+    n += pbWriteVarint(buf + n, t);
+    if (n + t > bufLen) return 0;
+    memcpy(buf + n, telem, t);
+    n += t;
+
+    n = pbWriteDataBitfield(buf, n, bufLen, bitfield);
+    if (n == 0) return 0;
+
+    return n;
+}
+
+size_t encodeNeighborInfo(uint32_t nodeId,
+                          uint32_t nodeBroadcastIntervalS,
+                          const NeighborEdgeInfo *neighbors,
+                          size_t neighborCount,
+                          uint8_t *buf, size_t bufLen,
+                          uint32_t bitfield) {
+    if (neighborCount > 0 && neighbors == nullptr) return 0;
+    if (neighborCount > MESH_NEIGHBOR_MAX) neighborCount = MESH_NEIGHBOR_MAX;
+
+    uint8_t info[208];
+    size_t p = 0;
+
+    // NeighborInfo.node_id
+    p += pbWriteVarint(info + p, (1 << 3) | 0);
+    p += pbWriteVarint(info + p, nodeId);
+
+    // NeighborInfo.last_sent_by_id
+    p += pbWriteVarint(info + p, (2 << 3) | 0);
+    p += pbWriteVarint(info + p, nodeId);
+
+    // NeighborInfo.node_broadcast_interval_secs
+    p += pbWriteVarint(info + p, (3 << 3) | 0);
+    p += pbWriteVarint(info + p, nodeBroadcastIntervalS);
+
+    for (size_t idx = 0; idx < neighborCount; idx++) {
+        const NeighborEdgeInfo &edge = neighbors[idx];
+        if (edge.nodeId == 0) continue;
+
+        uint8_t edgeMsg[24];
+        size_t e = 0;
+
+        // Neighbor.node_id
+        e += pbWriteVarint(edgeMsg + e, (1 << 3) | 0);
+        e += pbWriteVarint(edgeMsg + e, edge.nodeId);
+
+        // Neighbor.snr
+        edgeMsg[e++] = (2 << 3) | 5;
+        memcpy(edgeMsg + e, &edge.snr, 4);
+        e += 4;
+
+        // Fields 3 and 4 are local-storage metadata in Meshtastic and are not
+        // sent over mesh links, so they are intentionally omitted.
+
+        if (p + e + 3 > sizeof(info)) break;
+        p += pbWriteVarint(info + p, (4 << 3) | 2);
+        p += pbWriteVarint(info + p, e);
+        memcpy(info + p, edgeMsg, e);
+        p += e;
+    }
+
+    size_t n = 0;
+    n += pbWriteVarint(buf + n, (1 << 3) | 0);
+    n += pbWriteVarint(buf + n, NEIGHBORINFO_APP);
+    n += pbWriteVarint(buf + n, (2 << 3) | 2);
+    n += pbWriteVarint(buf + n, p);
+    if (n + p > bufLen) return 0;
+    memcpy(buf + n, info, p);
+    n += p;
+
+    n = pbWriteDataBitfield(buf, n, bufLen, bitfield);
+    if (n == 0) return 0;
+
+    return n;
+}
+
+size_t encodeRouting(uint32_t requestId, uint32_t fromNodeId, uint32_t errorReason,
+                     uint8_t *buf, size_t bufLen, uint32_t bitfield) {
+    // Inner Routing proto: field 3 (error_reason), varint
+    uint8_t inner[4]; size_t innerLen = 0;
+    inner[innerLen++] = (3 << 3) | 0;  // field 3, varint
+    innerLen += pbWriteVarint(inner + innerLen, errorReason);
+
+    size_t n = 0;
+    // Data field 1 (portnum = ROUTING_APP), varint
+    n += pbWriteVarint(buf + n, (1 << 3) | 0);
+    n += pbWriteVarint(buf + n, ROUTING_APP);
+    // Data field 2 (payload = inner Routing proto), length-delimited
+    n += pbWriteVarint(buf + n, (2 << 3) | 2);
+    n += pbWriteVarint(buf + n, innerLen);
+    if (n + innerLen + 10 > bufLen) return 0;
+    memcpy(buf + n, inner, innerLen); n += innerLen;
+    // Data field 5 (source), fixed32 — identifies who is sending this ACK
+    buf[n++] = (5 << 3) | 5;  // field 5, wire type 5 (fixed32)
+    memcpy(buf + n, &fromNodeId, 4); n += 4;
+    // Data field 6 (request_id), fixed32 — ID of the packet being ACK'd
+    buf[n++] = (6 << 3) | 5;  // field 6, wire type 5 (fixed32)
+    memcpy(buf + n, &requestId, 4); n += 4;
+    n = pbWriteDataBitfield(buf, n, bufLen, bitfield);
+    if (n == 0) return 0;
+    return n;
+}
+
+size_t encodeStoreForward(uint32_t rr, uint32_t windowMinutes,
+                          uint8_t *buf, size_t bufLen, uint32_t bitfield) {
+    // Worst case is 16 bytes (portnum 3, payload tag+len 2, inner 11). Checked
+    // up front rather than after the fact: the tags below are written straight
+    // into buf.
+    if (!buf || bufLen < 24) return 0;
+
+    // Inner StoreAndForward proto.
+    uint8_t inner[24]; size_t innerLen = 0;
+    inner[innerLen++] = (1 << 3) | 0;                       // rr, varint
+    innerLen += pbWriteVarint(inner + innerLen, rr);
+
+    if (windowMinutes) {
+        uint8_t hist[8]; size_t histLen = 0;
+        hist[histLen++] = (2 << 3) | 0;                     // History.window, varint
+        histLen += pbWriteVarint(hist + histLen, windowMinutes);
+
+        inner[innerLen++] = (3 << 3) | 2;                   // history, length-delimited
+        innerLen += pbWriteVarint(inner + innerLen, histLen);
+        memcpy(inner + innerLen, hist, histLen);
+        innerLen += histLen;
+    }
+
+    size_t n = 0;
+    // Data.portnum = STORE_FORWARD_APP
+    n += pbWriteVarint(buf + n, (1 << 3) | 0);
+    n += pbWriteVarint(buf + n, STORE_FORWARD_APP);
+    // Data.payload = inner StoreAndForward proto
+    n += pbWriteVarint(buf + n, (2 << 3) | 2);
+    n += pbWriteVarint(buf + n, innerLen);
+    if (n + innerLen > bufLen) return 0;
+    memcpy(buf + n, inner, innerLen); n += innerLen;
+    n = pbWriteDataBitfield(buf, n, bufLen, bitfield);
+    if (n == 0) return 0;
+    return n;
+}
+
+size_t encodeTracerouteRequest(uint8_t *buf, size_t bufLen, bool wantResponse,
+                               uint32_t bitfield) {
+    // Empty RouteDiscovery payload is valid for a traceroute request.
+    const size_t routePayloadLen = 0;
+    size_t n = 0;
+
+    // Data.portnum = TRACEROUTE_APP
+    n += pbWriteVarint(buf + n, (1 << 3) | 0);
+    n += pbWriteVarint(buf + n, TRACEROUTE_APP);
+
+    // Data.payload = empty RouteDiscovery
+    n += pbWriteVarint(buf + n, (2 << 3) | 2);
+    n += pbWriteVarint(buf + n, routePayloadLen);
+
+    if (wantResponse) {
+        n += pbWriteVarint(buf + n, (3 << 3) | 0);
+        n += pbWriteVarint(buf + n, 1);
+    }
+
+    n = pbWriteDataBitfield(buf, n, bufLen, bitfield);
+    if (n == 0) return 0;
+    if (n > bufLen) return 0;
+    return n;
+}
+
+size_t encodeTracerouteReply(uint8_t *buf, size_t bufLen,
+                             const uint8_t *routePayload, size_t routePayloadLen,
+                             uint32_t requestId, uint32_t fromNodeId,
+                             float rxSnr, uint32_t bitfield) {
+    if (!buf) return 0;
+    if (!routePayload) routePayloadLen = 0;
+
+    // RouteDiscovery.snr_towards (field 2, repeated int32) for the hop into this
+    // node, in quarter-dB. Built first so the payload length below can account
+    // for it: protobuf writes the length before the bytes.
+    //
+    // Appended rather than inserted, and that is what keeps it aligned: relays
+    // add their entry as the request passes through, so appending puts ours
+    // last, which is the position of the final hop.
+    uint8_t snrField[8];
+    size_t snrLen = 0;
+    if (rxSnr == rxSnr) {              // NAN check without <cmath>
+        long q = lroundf(rxSnr * 4.0f);
+        // -128 is Meshtastic's "no measurement" marker, so a genuine reading
+        // must never land on it and be read back as unknown.
+        if (q < -127) q = -127;
+        if (q >  127) q =  127;
+        snrField[snrLen++] = (2 << 3) | 0;
+        snrLen += pbWriteVarint(snrField + snrLen, (uint64_t)(int64_t)q);
+    }
+
+    const size_t routeLen = routePayloadLen + snrLen;
+    // portnum (2) + payload tag and length (up to 4) + source (5) + request_id (5).
+    if (routeLen + 16 > bufLen) return 0;
+
+    size_t n = 0;
+
+    // Data.portnum = TRACEROUTE_APP
+    n += pbWriteVarint(buf + n, (1 << 3) | 0);
+    n += pbWriteVarint(buf + n, TRACEROUTE_APP);
+
+    // Data.payload = the RouteDiscovery we were sent, plus our own SNR reading.
+    n += pbWriteVarint(buf + n, (2 << 3) | 2);
+    n += pbWriteVarint(buf + n, routeLen);
+    if (routePayloadLen > 0) {
+        memcpy(buf + n, routePayload, routePayloadLen);
+        n += routePayloadLen;
+    }
+    if (snrLen > 0) {
+        memcpy(buf + n, snrField, snrLen);
+        n += snrLen;
+    }
+
+    // Data.source (field 5), fixed32
+    buf[n++] = (5 << 3) | 5;
+    memcpy(buf + n, &fromNodeId, 4); n += 4;
+    // Data.request_id (field 6), fixed32 — marks this as a response, not a request.
+    buf[n++] = (6 << 3) | 5;
+    memcpy(buf + n, &requestId, 4); n += 4;
+
+    n = pbWriteDataBitfield(buf, n, bufLen, bitfield);
+    if (n == 0) return 0;
+
+    return n;
+}
+
+size_t encodePositionRequest(uint8_t *buf, size_t bufLen, uint32_t bitfield) {
+    // Empty Position payload + want_response=true: peer replies with their Position.
+    size_t n = 0;
+
+    // Data.portnum = POSITION_APP
+    n += pbWriteVarint(buf + n, (1 << 3) | 0);
+    n += pbWriteVarint(buf + n, POSITION_APP);
+
+    // Data.payload = empty Position
+    n += pbWriteVarint(buf + n, (2 << 3) | 2);
+    n += pbWriteVarint(buf + n, 0);
+
+    // Data.want_response = true
+    n += pbWriteVarint(buf + n, (3 << 3) | 0);
+    n += pbWriteVarint(buf + n, 1);
+
+    n = pbWriteDataBitfield(buf, n, bufLen, bitfield);
+    if (n == 0) return 0;
+    if (n > bufLen) return 0;
+    return n;
+}
+
+// ── ServiceEnvelope (MQTT bridge) ─────────────────────────────
+// Inner MeshPacket field numbers (Meshtastic mesh.proto).
+enum : uint32_t {
+    MP_FROM = 1, MP_TO = 2, MP_CHANNEL = 3, MP_DECODED = 4, MP_ENCRYPTED = 5, MP_ID = 6,
+    MP_RX_TIME = 7, MP_RX_SNR = 8, MP_HOP_LIMIT = 9, MP_WANT_ACK = 10,
+    MP_RX_RSSI = 12, MP_VIA_MQTT = 14, MP_HOP_START = 15,
+    MP_NEXT_HOP = 18, MP_RELAY_NODE = 19,
+};
+
+static size_t pbWriteFixed32(uint8_t *buf, uint32_t field, uint32_t v) {
+    size_t n = pbWriteVarint(buf, (field << 3) | 5);
+    memcpy(buf + n, &v, 4);
+    return n + 4;
+}
+
+static size_t pbWriteTaggedVarint(uint8_t *buf, uint32_t field, uint64_t v) {
+    size_t n = pbWriteVarint(buf, (field << 3) | 0);
+    return n + pbWriteVarint(buf + n, v);
+}
+
+size_t encodeServiceEnvelope(const MeshHdr &hdr,
+                             const uint8_t *cipher, size_t cipherLen,
+                             float rxSnr, int32_t rxRssi, uint32_t rxTime,
+                             const char *channelName, const char *gatewayId,
+                             uint8_t *out, size_t outLen) {
+    // Build the inner MeshPacket first, then wrap it in the ServiceEnvelope.
+    uint8_t mp[320];
+    size_t m = 0;
+
+    m += pbWriteFixed32(mp + m, MP_FROM, hdr.from);
+    m += pbWriteFixed32(mp + m, MP_TO, hdr.to);
+    m += pbWriteTaggedVarint(mp + m, MP_CHANNEL, hdr.channel);
+
+    // encrypted payload (field 5, length-delimited)
+    m += pbWriteVarint(mp + m, (MP_ENCRYPTED << 3) | 2);
+    m += pbWriteVarint(mp + m, cipherLen);
+    if (m + cipherLen + 32 > sizeof(mp)) return 0;
+    memcpy(mp + m, cipher, cipherLen); m += cipherLen;
+
+    m += pbWriteFixed32(mp + m, MP_ID, hdr.id);
+    if (rxTime) m += pbWriteFixed32(mp + m, MP_RX_TIME, rxTime);
+
+    // rx_snr (field 8, float / fixed32)
+    uint32_t snrBits; memcpy(&snrBits, &rxSnr, 4);
+    m += pbWriteFixed32(mp + m, MP_RX_SNR, snrBits);
+
+    m += pbWriteTaggedVarint(mp + m, MP_HOP_LIMIT, hdr.flags & 0x07);
+    if (hdr.flags & 0x08) m += pbWriteTaggedVarint(mp + m, MP_WANT_ACK, 1);
+    // rx_rssi is a protobuf int32: sign-extend to 64 bits for the varint.
+    if (rxRssi) m += pbWriteTaggedVarint(mp + m, MP_RX_RSSI, (uint64_t)(int64_t)rxRssi);
+    if (hdr.flags & 0x10) m += pbWriteTaggedVarint(mp + m, MP_VIA_MQTT, 1);
+    m += pbWriteTaggedVarint(mp + m, MP_HOP_START, (hdr.flags >> 5) & 0x07);
+    if (hdr.next_hop)   m += pbWriteTaggedVarint(mp + m, MP_NEXT_HOP, hdr.next_hop);
+    if (hdr.relay_node) m += pbWriteTaggedVarint(mp + m, MP_RELAY_NODE, hdr.relay_node);
+
+    // ServiceEnvelope: packet(1, message), channel_id(2, string), gateway_id(3, string)
+    size_t chanLen = channelName ? strlen(channelName) : 0;
+    size_t gwLen   = gatewayId ? strlen(gatewayId) : 0;
+    // Ahead of the first write, for the reason spelled out in
+    // encodeMapReportEnvelope(): the two varints below used to go out before
+    // this check, so a caller whose buffer could not hold even those overran it
+    // before being told no. Every caller today passes 400 bytes, so this has
+    // always been latent rather than live.
+    if (m + chanLen + gwLen + 12 > outLen) return 0;
+    size_t n = 0;
+    n += pbWriteVarint(out + n, (1 << 3) | 2);
+    n += pbWriteVarint(out + n, m);
+    memcpy(out + n, mp, m); n += m;
+
+    n += pbWriteVarint(out + n, (2 << 3) | 2);
+    n += pbWriteVarint(out + n, chanLen);
+    memcpy(out + n, channelName, chanLen); n += chanLen;
+
+    n += pbWriteVarint(out + n, (3 << 3) | 2);
+    n += pbWriteVarint(out + n, gwLen);
+    memcpy(out + n, gatewayId, gwLen); n += gwLen;
+
+    return n;
+}
+
+// ── MapReport (mqtt.proto) ────────────────────────────────────
+// Field numbers of the MapReport message itself. Written longhand for the same
+// reason the MeshPacket fields above are: this is a wire format owned by
+// somebody else, and a number that drifts is a field that silently lands
+// somewhere no reader looks.
+enum : uint32_t {
+    MR_LONG_NAME = 1, MR_SHORT_NAME = 2, MR_ROLE = 3, MR_HW_MODEL = 4,
+    MR_FIRMWARE = 5, MR_REGION = 6, MR_MODEM_PRESET = 7,
+    MR_HAS_DEFAULT_CHANNEL = 8, MR_LATITUDE_I = 9, MR_LONGITUDE_I = 10,
+    MR_ALTITUDE = 11, MR_POSITION_PRECISION = 12, MR_ONLINE_LOCAL_NODES = 13,
+};
+
+static size_t pbWriteString(uint8_t *buf, uint32_t field, const char *str) {
+    const size_t len = str ? strlen(str) : 0;
+    size_t n = pbWriteVarint(buf, (field << 3) | 2);
+    n += pbWriteVarint(buf + n, len);
+    if (len) memcpy(buf + n, str, len);
+    return n + len;
+}
+
+// The MapReport message body. Every string here comes from user config, so the
+// one thing worth bounds-checking up front is their combined length — the
+// numeric fields that follow are at most 6 bytes each and the caller's buffer
+// is sized for them.
+static size_t encodeMapReport(const MapReportInfo &info, uint8_t *buf, size_t bufLen) {
+    const size_t longLen  = info.longName ? strlen(info.longName) : 0;
+    const size_t shortLen = info.shortName ? strlen(info.shortName) : 0;
+    const size_t fwLen    = info.firmwareVersion ? strlen(info.firmwareVersion) : 0;
+    // 3 strings x 2 tag/length bytes, plus 10 numeric fields at <= 6 bytes.
+    if (longLen + shortLen + fwLen + 6 + 60 > bufLen) return 0;
+
+    size_t n = 0;
+    n += pbWriteString(buf + n, MR_LONG_NAME, info.longName);
+    n += pbWriteString(buf + n, MR_SHORT_NAME, info.shortName);
+    // proto3 omits zero-valued scalars; role CLIENT (0) and region UNSET (0) are
+    // both meaningful defaults on the reader's side, so let them fall out.
+    if (info.role)        n += pbWriteTaggedVarint(buf + n, MR_ROLE, info.role);
+    n += pbWriteTaggedVarint(buf + n, MR_HW_MODEL, MY_HW_MODEL);
+    n += pbWriteString(buf + n, MR_FIRMWARE, info.firmwareVersion);
+    if (info.region)      n += pbWriteTaggedVarint(buf + n, MR_REGION, info.region);
+    if (info.modemPreset) n += pbWriteTaggedVarint(buf + n, MR_MODEM_PRESET, info.modemPreset);
+    if (info.hasDefaultChannel) n += pbWriteTaggedVarint(buf + n, MR_HAS_DEFAULT_CHANNEL, 1);
+
+    if (info.hasPosition) {
+        // latitude_i/longitude_i are sfixed32, like Position's — not varints.
+        n += pbWriteFixed32(buf + n, MR_LATITUDE_I, (uint32_t)info.latI);
+        n += pbWriteFixed32(buf + n, MR_LONGITUDE_I, (uint32_t)info.lonI);
+        if (info.alt) n += pbWriteTaggedVarint(buf + n, MR_ALTITUDE, (uint64_t)(int64_t)info.alt);
+        n += pbWriteTaggedVarint(buf + n, MR_POSITION_PRECISION, info.positionPrecision);
+    }
+
+    if (info.onlineLocalNodes) {
+        n += pbWriteTaggedVarint(buf + n, MR_ONLINE_LOCAL_NODES, info.onlineLocalNodes);
+    }
+    return n;
+}
+
+size_t encodeMapReportEnvelope(uint32_t fromNode, const MapReportInfo &info,
+                               const char *channelName, const char *gatewayId,
+                               uint8_t *out, size_t outLen) {
+    uint8_t report[192];
+    const size_t r = encodeMapReport(info, report, sizeof(report));
+    if (r == 0) return 0;
+
+    // Data { portnum = MAP_REPORT_APP, payload = <MapReport> }
+    uint8_t data[208];
+    size_t d = 0;
+    d += pbWriteTaggedVarint(data + d, 1, MAP_REPORT_APP);
+    d += pbWriteVarint(data + d, (2 << 3) | 2);
+    d += pbWriteVarint(data + d, r);
+    if (d + r > sizeof(data)) return 0;
+    memcpy(data + d, report, r); d += r;
+
+    // MeshPacket { from, to = broadcast, decoded = Data, id }. No channel hash
+    // and no hop limit: nothing relays this, so the fields that bound a flood
+    // have nothing to say. The id is real rather than zero so a broker that
+    // dedupes by from:id does not fold successive reports into one.
+    uint8_t mp[240];
+    size_t m = 0;
+    m += pbWriteFixed32(mp + m, MP_FROM, fromNode);
+    m += pbWriteFixed32(mp + m, MP_TO, 0xFFFFFFFFUL);
+    m += pbWriteVarint(mp + m, (MP_DECODED << 3) | 2);
+    m += pbWriteVarint(mp + m, d);
+    if (m + d + 8 > sizeof(mp)) return 0;
+    memcpy(mp + m, data, d); m += d;
+    m += pbWriteFixed32(mp + m, MP_ID, nextMeshPacketId());
+
+    // ServiceEnvelope: packet(1), channel_id(2), gateway_id(3) — same shape as
+    // encodeServiceEnvelope() builds, only the inner packet differs.
+    const size_t chanLen = channelName ? strlen(channelName) : 0;
+    const size_t gwLen   = gatewayId ? strlen(gatewayId) : 0;
+    // Checked before the first byte goes out, not partway through: everything
+    // below writes unconditionally, so a buffer too small to hold the envelope
+    // has to be refused here. 12 covers the three tag+length pairs, whose
+    // lengths are all single varint bytes at these sizes.
+    if (m + chanLen + gwLen + 12 > outLen) return 0;
+    size_t n = 0;
+    n += pbWriteVarint(out + n, (1 << 3) | 2);
+    n += pbWriteVarint(out + n, m);
+    memcpy(out + n, mp, m); n += m;
+
+    n += pbWriteVarint(out + n, (2 << 3) | 2);
+    n += pbWriteVarint(out + n, chanLen);
+    memcpy(out + n, channelName, chanLen); n += chanLen;
+
+    n += pbWriteVarint(out + n, (3 << 3) | 2);
+    n += pbWriteVarint(out + n, gwLen);
+    memcpy(out + n, gatewayId, gwLen); n += gwLen;
+
+    return n;
+}
+
+// Parse the inner MeshPacket bytes into an on-air header + ciphertext.
+static bool decodeMeshPacketInner(const uint8_t *buf, size_t len,
+                                  MeshHdr &hdr, uint8_t *cipher, size_t cipherCap,
+                                  size_t &cipherLen) {
+    memset(&hdr, 0, sizeof(hdr));
+    cipherLen = 0;
+    uint32_t hopLimit = 0, hopStart = 0, wantAck = 0;
+    bool haveCipher = false;
+    size_t i = 0;
+    while (i < len) {
+        uint64_t tag; i = pbReadVarint(buf, len, i, tag); if (!i) break;
+        uint32_t field = tag >> 3, wtype = tag & 7;
+        if (wtype == 0) {              // varint
+            uint64_t v; i = pbReadVarint(buf, len, i, v); if (!i) break;
+            switch (field) {
+                case MP_CHANNEL:    hdr.channel   = (uint8_t)v; break;
+                case MP_HOP_LIMIT:  hopLimit      = (uint32_t)v; break;
+                case MP_WANT_ACK:   wantAck       = v ? 1 : 0; break;
+                case MP_HOP_START:  hopStart      = (uint32_t)v; break;
+                case MP_NEXT_HOP:   hdr.next_hop  = (uint8_t)v; break;
+                case MP_RELAY_NODE: hdr.relay_node = (uint8_t)v; break;
+                default: break;
+            }
+        } else if (wtype == 5) {       // fixed32
+            if (i + 4 > len) break;
+            uint32_t v; memcpy(&v, buf + i, 4); i += 4;
+            switch (field) {
+                case MP_FROM: hdr.from = v; break;
+                case MP_TO:   hdr.to   = v; break;
+                case MP_ID:   hdr.id   = v; break;
+                default: break;
+            }
+        } else if (wtype == 2) {       // length-delimited
+            uint64_t sz; i = pbReadVarint(buf, len, i, sz); if (!i) break;
+            if (i + sz > len) break;
+            if (field == MP_ENCRYPTED) {
+                if (sz > cipherCap) return false;
+                memcpy(cipher, buf + i, sz);
+                cipherLen = (size_t)sz;
+                haveCipher = true;
+            }
+            i += sz;
+        } else {
+            i = pbSkip(buf, len, i, wtype);
+            if (!i) break;
+        }
+    }
+    if (!haveCipher) return false;
+    // Reassemble on-air flags, forcing via_mqtt on for downlinked packets.
+    hdr.flags = (uint8_t)((hopLimit & 0x07) | (wantAck << 3) | 0x10 |
+                          ((hopStart & 0x07) << 5));
+    return true;
+}
+
+bool decodeServiceEnvelope(const uint8_t *buf, size_t len,
+                           MeshHdr &hdr, uint8_t *cipher, size_t cipherCap,
+                           size_t &cipherLen,
+                           char *channelName, size_t channelNameCap) {
+    if (channelName && channelNameCap) channelName[0] = '\0';
+    const uint8_t *packetPtr = nullptr; size_t packetLen = 0;
+    size_t i = 0;
+    while (i < len) {
+        uint64_t tag; i = pbReadVarint(buf, len, i, tag); if (!i) break;
+        uint32_t field = tag >> 3, wtype = tag & 7;
+        if (wtype == 2) {
+            uint64_t sz; i = pbReadVarint(buf, len, i, sz); if (!i) break;
+            if (i + sz > len) break;
+            if (field == 1) { packetPtr = buf + i; packetLen = (size_t)sz; }
+            else if (field == 2 && channelName && channelNameCap) {
+                size_t copy = sz < channelNameCap - 1 ? (size_t)sz : channelNameCap - 1;
+                memcpy(channelName, buf + i, copy);
+                channelName[copy] = '\0';
+            }
+            i += sz;
+        } else {
+            i = pbSkip(buf, len, i, wtype);
+            if (!i) break;
+        }
+    }
+    if (!packetPtr) return false;
+    return decodeMeshPacketInner(packetPtr, packetLen, hdr, cipher, cipherCap, cipherLen);
+}
+
+const char *portnumName(uint32_t p) {
+    switch (p) {
+        case TEXT_MESSAGE_APP:  return "TEXT";
+        case POSITION_APP:      return "POSITION";
+        case NODEINFO_APP:      return "NODEINFO";
+        case ROUTING_APP:       return "ROUTING";
+        case ADMIN_APP:         return "ADMIN";
+        case TELEMETRY_APP:     return "TELEMETRY";
+        case TRACEROUTE_APP:    return "TRACEROUTE";
+        case NEIGHBORINFO_APP:  return "NEIGHBORINFO";
+        case STORE_FORWARD_APP: return "STORE_FORWARD";
+        case MAP_REPORT_APP:    return "MAP_REPORT";
+        case MESH_BEACON_APP:   return "MESH_BEACON";
+        case LORA_OTA_APP:      return "LORA_OTA";
+        default:                return "UNKNOWN";
+    }
+}
