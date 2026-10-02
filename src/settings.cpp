@@ -21,6 +21,7 @@ void settingsDefaults(Settings &s, uint32_t nodeId) {
     s.mqttPort = 1883;
     strcpy(s.mqttRoot, "msh/US");
     strcpy(s.apPass, "camillia");
+    strcpy(s.tz, "EST5EDT,M3.2.0,M11.1.0");
 }
 
 static bool fail(char *err, size_t cap, const char *msg) {

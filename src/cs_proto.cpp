@@ -92,7 +92,7 @@ size_t encodeDiscover(uint8_t *buf, size_t cap) {
 }
 
 size_t encodeAnnounce(const Announce &a, uint8_t *buf, size_t cap) {
-    if (a.count > MAX_CHANNELS) return 0;
+    if (a.count > MAX_ANNOUNCE_CHANNELS) return 0;
     Writer w{buf, cap};
     w.u8(VERSION); w.u8(ANNOUNCE);
     writeStr(w, a.shortName, sizeof(a.shortName) - 1);
@@ -109,7 +109,7 @@ bool decodeAnnounce(const uint8_t *buf, size_t len, Announce &out) {
     if (!readHeader(r, ANNOUNCE)) return false;
     if (!readStr(r, out.shortName, sizeof(out.shortName))) return false;
     out.count = r.u8();
-    if (!r.ok || out.count > MAX_CHANNELS) return false;
+    if (!r.ok || out.count > MAX_ANNOUNCE_CHANNELS) return false;
     for (uint8_t i = 0; i < out.count; i++) {
         out.ch[i].id = r.u32();
         if (!readStr(r, out.ch[i].name, sizeof(out.ch[i].name))) return false;

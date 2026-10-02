@@ -30,6 +30,7 @@ struct Settings {
     char       apPass[64];    // empty = open AP; else >= 8 chars
     char       staSsid[33];
     char       staPass[64];
+    char       tz[48];        // POSIX TZ string for the OLED clock
 };
 
 void settingsDefaults(Settings &s, uint32_t nodeId);

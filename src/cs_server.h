@@ -55,6 +55,13 @@ public:
     int  queueLength() const { return _qLen; }
     bool busy() const        { return _txIdx < _txCount; }
 
+    // Time of the last BATCH packet sent to a node (announces don't count).
+    bool lastSentAt(uint32_t &unix, uint32_t &uptimeSec) const {
+        if (!_everSentBatch) return false;
+        unix = _lastSentUnix; uptimeSec = _lastSentUptime;
+        return true;
+    }
+
 private:
     struct Pending { uint32_t from; int slot; uint8_t hops; csp::Request req; };
     struct AnnounceTo { uint32_t to; uint8_t hops; };
@@ -82,5 +89,8 @@ private:
     int      _txIdx = 0;
 
     bool     _sentAny = false;
+    bool     _everSentBatch = false;
+    uint32_t _lastSentUnix = 0;
+    uint32_t _lastSentUptime = 0;
     uint32_t _nextSendMs = 0;
 };

@@ -15,7 +15,7 @@ constexpr uint8_t  FLAG_TIME_VALID = 4;
 constexpr uint32_t AGE_UNKNOWN     = 0xFFFFFFFF;
 constexpr size_t   MAX_PAYLOAD     = 233;
 constexpr size_t   MAX_TEXT        = 200;
-constexpr int      MAX_CHANNELS    = 3;
+constexpr int      MAX_ANNOUNCE_CHANNELS    = 3;
 constexpr size_t   ITEM_OVERHEAD   = 17;   // seq, from, packetId, age, textLen
 constexpr size_t   BATCH_HEADER    = 12;   // version, type, epoch, flags, time, count
 
@@ -24,7 +24,7 @@ extern const char    DISCOVERY_CHANNEL_NAME[];   // "camillia-cs"
 extern const uint8_t DISCOVERY_KEY[16];
 
 struct AnnounceChannel { uint32_t id; char name[12]; };
-struct Announce        { char shortName[5]; uint8_t count; AnnounceChannel ch[MAX_CHANNELS]; };
+struct Announce        { char shortName[5]; uint8_t count; AnnounceChannel ch[MAX_ANNOUNCE_CHANNELS]; };
 struct Request         { uint32_t epoch, cursor, anchorFrom, anchorId; };
 struct Item            { uint32_t seq, from, packetId, ageSec; uint8_t textLen; char text[MAX_TEXT + 1]; };
 struct BatchHeader     { uint32_t epoch; uint8_t flags; uint32_t serverTime; uint8_t count; };

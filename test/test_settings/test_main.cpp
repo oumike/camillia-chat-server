@@ -22,6 +22,7 @@ void test_defaults() {
     TEST_ASSERT_EQUAL_STRING("msh/US", s.mqttRoot);
     TEST_ASSERT_EQUAL(1883, s.mqttPort);
     TEST_ASSERT_EQUAL_STRING("camillia", s.apPass);
+    TEST_ASSERT_EQUAL_STRING("EST5EDT,M3.2.0,M11.1.0", s.tz);
     char err[96];
     TEST_ASSERT_TRUE(settingsValidate(s, err, sizeof err));
 }

@@ -283,6 +283,22 @@ void test_serves_fifo_one_at_a_time() {
     TEST_ASSERT_TRUE(sawB);
 }
 
+void test_last_sent_at_tracks_batch_packets() {
+    Rig rig(3, 5);
+    uint32_t unix = 1, up = 1;
+    TEST_ASSERT_FALSE(rig.server.lastSentAt(unix, up));
+    uint8_t buf[4];
+    rig.server.onPacket(0xB, -1, 0, buf, encodeDiscover(buf, sizeof buf), 0);
+    Outgoing o;
+    TEST_ASSERT_TRUE(rig.server.poll(0, 1700000000, true, 50, o));   // announce only
+    TEST_ASSERT_FALSE(rig.server.lastSentAt(unix, up));
+    rig.request(0xA, 0, 0, 0);
+    TEST_ASSERT_TRUE(rig.server.poll(5000, 1700000077, true, 77, o));
+    TEST_ASSERT_TRUE(rig.server.lastSentAt(unix, up));
+    TEST_ASSERT_EQUAL_UINT32(1700000077, unix);
+    TEST_ASSERT_EQUAL_UINT32(77, up);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_since_uses_cursor_when_epoch_matches);
@@ -303,5 +319,6 @@ int main() {
     RUN_TEST(test_queue_capacity_24);
     RUN_TEST(test_queue_replaces_duplicate_requester);
     RUN_TEST(test_serves_fifo_one_at_a_time);
+    RUN_TEST(test_last_sent_at_tracks_batch_packets);
     return UNITY_END();
 }

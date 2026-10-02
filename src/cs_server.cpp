@@ -71,7 +71,7 @@ void CsServer::begin(const ServerConfig &cfg, ChannelStore *stores, const uint32
     if (_cfg.batchSize < 1) _cfg.batchSize = 1;
     if (_cfg.batchSize > CS_MAX_BATCH) _cfg.batchSize = CS_MAX_BATCH;
     _stores = stores;
-    _chanCount = chanCount > MAX_CHANNELS ? MAX_CHANNELS : chanCount;
+    _chanCount = chanCount > MAX_ANNOUNCE_CHANNELS ? MAX_ANNOUNCE_CHANNELS : chanCount;
     memset(&_announce, 0, sizeof(_announce));
     strncpy(_announce.shortName, _cfg.shortName, sizeof(_announce.shortName) - 1);
     _announce.count = (uint8_t)_chanCount;
@@ -145,6 +145,9 @@ bool CsServer::poll(uint32_t nowMs, uint32_t nowUnix, bool timeValid, uint32_t n
         out.len = _txLen[_txIdx];
         memcpy(out.payload, _tx[_txIdx], out.len);
         _txIdx++;
+        _everSentBatch = true;
+        _lastSentUnix = timeValid ? nowUnix : 0;
+        _lastSentUptime = nowUptimeSec;
     }
     _sentAny = true;
     _nextSendMs = nowMs + _cfg.packetGapMs;
