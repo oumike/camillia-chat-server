@@ -3,9 +3,11 @@
 #include <WiFi.h>
 #include <esp_mac.h>
 #include <time.h>
+#include "airtime.h"
 #include "channel_store.h"
 #include "cs_server.h"
 #include "messages_json.h"
+#include "mesh_channel_plan.h"
 #include "mesh_proto.h"
 #include "node_identity.h"
 #include "persistence.h"
@@ -24,6 +26,12 @@ static uint32_t     s_nodeId = 0;
 static uint32_t     s_restartAtMs = 0;
 static ChannelStore s_stores[CS_MAX_CHANNELS];
 static StoredMsg   *s_listBuf = nullptr;   // PSRAM scratch for the Messages tab
+static CsServer      s_server;
+static AirtimeBudget s_airtime;
+static uint8_t       s_dutyLimitPct = 100;    // 10 in EU regions
+
+// Meshtastic header (16) + Data framing around our payload (portnum, length, bitfield).
+static constexpr uint32_t kFrameOverhead = 16 + 8;
 
 static uint32_t nodeIdFromMac() {
     uint8_t mac[6];
@@ -75,6 +83,102 @@ static void listMessages(int slot, const std::function<void(const char *)> &emit
     }
 }
 
+static const PresetParams &preset() {
+    return kPresets[s_settings.modemPreset < PRESET_COUNT ? s_settings.modemPreset : PRESET_LONG_FAST];
+}
+
+static uint32_t airMsFor(size_t payloadLen) {
+    const PresetParams &p = preset();
+    return timeOnAirMs((uint32_t)(payloadLen + kFrameOverhead), p.sf, p.bw, p.cr, 16);
+}
+
+static void serverBegin() {
+    ServerConfig cfg;
+    cfg.maxHops = s_settings.maxHops;
+    cfg.batchSize = s_settings.batchSize;
+    cfg.packetGapMs = s_settings.packetGapMs;
+    strncpy(cfg.shortName, s_settings.shortName, sizeof(cfg.shortName) - 1);
+    static uint32_t ids[CS_MAX_CHANNELS];
+    static char names[CS_MAX_CHANNELS][12];
+    for (int i = 0; i < s_settings.chanCount; i++) {
+        ids[i] = csp::channelId(s_settings.ch[i].name, s_settings.ch[i].key, s_settings.ch[i].keyLen);
+        strncpy(names[i], s_settings.ch[i].name, sizeof(names[i]) - 1);
+    }
+    s_server.begin(cfg, s_stores, ids, names, s_settings.chanCount);
+    s_dutyLimitPct = (!strcmp(s_settings.region, "EU_868") || !strcmp(s_settings.region, "EU_433")) ? 10 : 100;
+    Serial.printf("[cs] server: batch %u, gap %u ms, max hops %u, duty limit %u%%\n",
+                  cfg.batchSize, cfg.packetGapMs, cfg.maxHops, s_dutyLimitPct);
+}
+
+static void logOutgoing(const Outgoing &o, bool ok) {
+    csp::Type t;
+    if (csp::peekType(o.payload, o.len, t) && t == csp::BATCH) {
+        csp::BatchHeader h;
+        static csp::Item items[16];
+        uint8_t n = 0;
+        if (csp::decodeBatch(o.payload, o.len, h, items, 16, n)) {
+            Serial.printf("[cs] tx BATCH to !%08x ch%d hops %u: %u item(s)%s%s, seq %lu..%lu, %u bytes %s\n",
+                          (unsigned)o.to, o.chanSlot, o.hopLimit, n,
+                          (h.flags & csp::FLAG_LAST) ? " LAST" : "", (h.flags & csp::FLAG_MORE) ? " MORE" : "",
+                          n ? (unsigned long)items[0].seq : 0UL, n ? (unsigned long)items[n - 1].seq : 0UL,
+                          (unsigned)o.len, ok ? "ok" : "FAILED");
+            return;
+        }
+    }
+    Serial.printf("[cs] tx ANNOUNCE to !%08x hops %u, %u bytes %s\n", (unsigned)o.to, o.hopLimit,
+                  (unsigned)o.len, ok ? "ok" : "FAILED");
+}
+
+static void serveLoop(uint32_t nowMs) {
+    // Check the budget against a worst-case packet before poll() dequeues one.
+    if (!s_airtime.canSend(nowMs, airMsFor(csp::MAX_PAYLOAD), s_dutyLimitPct)) return;
+    static Outgoing out;
+    if (!s_server.poll(nowMs, (uint32_t)time(nullptr), timeValid(), nowMs / 1000, out)) return;
+    bool ok = radioSend(out.to, out.chanSlot, out.hopLimit, PORT_CHAT_SERVER, out.payload, out.len);
+    s_airtime.record(millis(), airMsFor(out.len));
+    logOutgoing(out, ok);
+}
+
+static void handleChatServerPacket(const MeshPacket &pkt, uint32_t nowMs) {
+    int slot = slotForChanIdx(pkt.chanIdx);
+    if (slot == -2 || pkt.hdr.from == s_nodeId) return;
+    csp::Type t;
+    if (!csp::peekType(pkt.payload, pkt.payloadLen, t)) return;
+    Serial.printf("[cs] rx %s from !%08x ch%d hops %u\n", t == csp::DISCOVER ? "DISCOVER" : t == csp::REQUEST ? "REQUEST" : "other",
+                  (unsigned)pkt.hdr.from, slot, hopsTravelled(pkt.hdr));
+    s_server.onPacket(pkt.hdr.from, slot, hopsTravelled(pkt.hdr), pkt.payload, pkt.payloadLen, nowMs);
+}
+
+#ifdef CS_SERIAL_TEST
+// Bench hook: "req <slot> <cursor>" / "disc" fake a node 0x12345678 at 0 hops.
+static void serialTestLoop(uint32_t nowMs) {
+    static String line;
+    while (Serial.available()) {
+        char c = (char)Serial.read();
+        if (c != '\n' && c != '\r') { line += c; continue; }
+        if (!line.length()) continue;
+        uint8_t buf[csp::MAX_PAYLOAD];
+        size_t n = 0;
+        int slot = -1;
+        unsigned long cursor = 0;
+        if (sscanf(line.c_str(), "req %d %lu", &slot, &cursor) >= 1 && slot >= 0 && slot < s_settings.chanCount) {
+            csp::Request r{cursor ? s_stores[slot].epoch() : 0, (uint32_t)cursor, 0, 0};
+            n = csp::encodeRequest(r, buf, sizeof buf);
+        } else if (line == "disc") {
+            slot = -1;
+            n = csp::encodeDiscover(buf, sizeof buf);
+        }
+        if (n) {
+            Serial.printf("[cs] test: %s\n", line.c_str());
+            s_server.onPacket(0x12345678, slot, 0, buf, n, nowMs);
+        } else {
+            Serial.printf("[cs] test: unknown \"%s\" (use: req <slot> <cursor> | disc)\n", line.c_str());
+        }
+        line = "";
+    }
+}
+#endif
+
 static void ingest(const MeshPacket &pkt) {
     int slot = slotForChanIdx(pkt.chanIdx);
     if (pkt.portnum != TEXT_MESSAGE_APP || pkt.hdr.to != 0xFFFFFFFF || slot < 0) return;
@@ -110,6 +214,7 @@ void setup() {
     persistLoadAll(s_stores, s_settings);
 
     radioBegin(s_settings, s_nodeId);
+    serverBegin();
     identityBegin(s_settings, s_nodeId);
 }
 
@@ -118,7 +223,14 @@ void loop() {
     webLoop();
 
     MeshPacket pkt;
-    while (radioPoll(pkt)) ingest(pkt);
+    while (radioPoll(pkt)) {
+        if (pkt.portnum == PORT_CHAT_SERVER) handleChatServerPacket(pkt, nowMs);
+        else ingest(pkt);
+    }
+#ifdef CS_SERIAL_TEST
+    serialTestLoop(nowMs);
+#endif
+    serveLoop(nowMs);
 
     persistMaybeSave(s_stores, s_settings.chanCount, nowMs);
     identityLoop(nowMs);
@@ -127,6 +239,7 @@ void loop() {
     st.nodeName = s_settings.longName;
     snprintf(st.ip, sizeof st.ip, "%s", ipText().c_str());
     st.mqtt = "off";
+    st.everSent = s_server.lastSentAt(st.lastSentUnix, st.lastSentUptimeSec);
     displayUpdate(st);
 
     if (s_restartAtMs && (int32_t)(nowMs - s_restartAtMs) >= 0) ESP.restart();
