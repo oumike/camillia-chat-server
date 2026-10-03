@@ -370,6 +370,10 @@ void setup() {
     // raising it late stops this board booting. See board_v4_exp.h.
     pinMode(VEXT_PIN, OUTPUT);
     digitalWrite(VEXT_PIN, VEXT_ON_LEVEL);
+    // GPIO7 (BOARD_POWERON in camillia-mt main_lvgl.cpp setup()) HIGH before lcd.init(),
+    // not only later in radioBegin().
+    pinMode(LORA_FEM_POWER_PIN, OUTPUT);
+    digitalWrite(LORA_FEM_POWER_PIN, HIGH);
 #endif
     Serial.begin(115200);
     delay(1500);

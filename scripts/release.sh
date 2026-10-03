@@ -9,6 +9,7 @@
 #
 # What a release publishes:
 #   camillia-chat-server-heltec-v4-vX.Y.Z.bin   merged factory image, written at 0x0
+#   camillia-chat-server-heltec-v4-expansion-vX.Y.Z.bin   same, for the V4 + expansion display board
 #   flash.sh                                     helper that writes it with esptool
 #
 # There is no OTA image and no signing key: the chat server is updated over USB.

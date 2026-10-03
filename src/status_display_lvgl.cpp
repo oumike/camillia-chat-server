@@ -34,6 +34,7 @@ constexpr uint32_t kTextMain = 0xF3F6FA, kTextDim = 0xB7C0CC;
 LGFX_V4Exp    s_lcd;
 bool          s_off = false;
 bool          s_touchOff = false;
+bool          s_panelUp = false;   // lcd.init() succeeded; fail() may then blank the backlight
 uint8_t       s_touchFails = 0;
 lv_display_t *s_disp = nullptr;
 uint8_t      *s_buf1 = nullptr, *s_buf2 = nullptr;
@@ -83,6 +84,7 @@ lv_color_t c565(uint16_t c) {
 
 void fail(const char *reason) {
     Serial.printf("[cs] display: %s\n", reason);
+    if (s_panelUp) s_lcd.setBrightness(0);   // don't leave a lit black panel
     s_off = true;
 }
 
@@ -442,13 +444,20 @@ void fillActivity(const DisplayStatus &st) {
 void displayBegin() {
     // GPIO36 (VEXT) is already LOW from the top of setup(); not touched here.
     if (!s_lcd.init()) return fail("panel init failed");
+    s_panelUp = true;
     s_lcd.setRotation(TFT_ROTATION_LANDSCAPE);
     s_lcd.setBrightness(TFT_BRIGHTNESS_DEFAULT);
     s_lcd.fillScreen(TFT_BLACK);
 
     // lcd.init() started the CHSC6X on Wire1; if it does not ACK, never poll it.
-    Wire1.beginTransmission((uint8_t)TOUCH_ADDR);
-    if (Wire1.endTransmission() != 0) {
+    // chsc6x_init only waits 30 ms after reset, so retry the probe before giving up.
+    bool touchAck = false;
+    for (int attempt = 0; attempt < 3 && !touchAck; attempt++) {
+        delay(100);
+        Wire1.beginTransmission((uint8_t)TOUCH_ADDR);
+        touchAck = (Wire1.endTransmission() == 0);
+    }
+    if (!touchAck) {
         s_touchOff = true;
         Serial.printf("[cs] display: touch controller not answering; touch off\n");
     }
