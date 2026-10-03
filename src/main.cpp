@@ -7,6 +7,7 @@
 #include "airtime.h"
 #include "battery.h"
 #include "battery_level.h"
+#include "board.h"
 #include "channel_store.h"
 #include "cs_server.h"
 #include "messages_json.h"
@@ -364,6 +365,12 @@ static void ingest(const MeshPacket &pkt, MsgSource source) {
 }
 
 void setup() {
+#if defined(CS_BOARD_V4_EXPANSION)
+    // VEXT (GPIO36) LOW first, and never again: HIGH breaks touch I2C, and
+    // raising it late stops this board booting. See board_v4_exp.h.
+    pinMode(VEXT_PIN, OUTPUT);
+    digitalWrite(VEXT_PIN, VEXT_ON_LEVEL);
+#endif
     Serial.begin(115200);
     delay(1500);
     s_nodeId = nodeIdFromMac();
