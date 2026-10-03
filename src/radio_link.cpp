@@ -22,7 +22,7 @@ bool radioBegin(const Settings &s, uint32_t myNodeId) {
     s_myNodeId = myNodeId;
     s_chanCount = s.chanCount;
     // Unused store slots get a random 32-byte key so they never "decrypt" anything.
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < SETTINGS_MAX_CHANNELS; i++) {
         if (i < s.chanCount) {
             setSlot(i, s.ch[i].name, s.ch[i].key, s.ch[i].keyLen, i == 0 ? 0 : 1);
         } else {

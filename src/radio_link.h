@@ -4,7 +4,7 @@
 #include "mesh_proto.h"
 #include "settings.h"
 
-constexpr int DISCOVERY_SLOT = 3;   // CHANNEL_KEYS index of the camillia-cs channel
+constexpr int DISCOVERY_SLOT = SETTINGS_MAX_CHANNELS;   // CHANNEL_KEYS index of the camillia-cs channel
 constexpr uint32_t PORT_CHAT_SERVER = 256;   // Meshtastic PRIVATE_APP
 
 bool radioBegin(const Settings &s, uint32_t myNodeId);

@@ -141,9 +141,16 @@ uint8_t computeChannelHash(const char *name, const uint8_t *key, uint8_t keyLen)
 // ── Channel key table ─────────────────────────────────────────
 // 1-byte PSK keys are stored as a single byte and expanded at runtime via expandPsk().
 // role: 0=PRIMARY, 1=SECONDARY, 2=DISABLED
-// camillia chat server: 3 store slots + the discovery slot, all disabled until
+// camillia chat server: 10 store slots + the discovery slot, all disabled until
 // radio_link fills them from settings (see VENDORED.md).
 ChannelKey CHANNEL_KEYS[MAX_CHANNELS] = {
+    { "", { 0 }, 0, 0xFF, {}, 2, false, false, false, false },
+    { "", { 0 }, 0, 0xFF, {}, 2, false, false, false, false },
+    { "", { 0 }, 0, 0xFF, {}, 2, false, false, false, false },
+    { "", { 0 }, 0, 0xFF, {}, 2, false, false, false, false },
+    { "", { 0 }, 0, 0xFF, {}, 2, false, false, false, false },
+    { "", { 0 }, 0, 0xFF, {}, 2, false, false, false, false },
+    { "", { 0 }, 0, 0xFF, {}, 2, false, false, false, false },
     { "", { 0 }, 0, 0xFF, {}, 2, false, false, false, false },
     { "", { 0 }, 0, 0xFF, {}, 2, false, false, false, false },
     { "", { 0 }, 0, 0xFF, {}, 2, false, false, false, false },

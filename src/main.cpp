@@ -14,6 +14,7 @@
 #include "persistence.h"
 #include "radio_link.h"
 #include "settings.h"
+#include "settings_yaml.h"
 #include "status_display.h"
 #include "web_ui.h"
 
@@ -57,6 +58,15 @@ static void wifiBegin() {
     Serial.printf("[cs] AP %s at %s\n", ssid.c_str(), WiFi.softAPIP().toString().c_str());
 }
 
+static const char *presetName(uint8_t i) { return i < PRESET_COUNT ? kPresets[i].channelName : nullptr; }
+static int presetIndex(const char *name) {
+    for (uint8_t i = 0; i < PRESET_COUNT; i++)
+        if (!strcmp(kPresets[i].channelName, name) || !strcmp(kPresets[i].name, name))
+            return presetUsableOnThisRadio(i) ? i : -1;
+    return -1;
+}
+static const YamlPresetMap kYamlPresets{presetName, presetIndex};
+
 static String lastSentJson() {
     uint32_t unix, up;
     if (!s_server.lastSentAt(unix, up)) return "null";
@@ -91,6 +101,29 @@ static void listMessages(int slot, const std::function<void(const char *)> &emit
         uint32_t age = messageAgeSec(s_listBuf[i], nowUnix, timeValid(), up);
         if (messageJson(s_listBuf[i], age, json, sizeof json)) emit(json);
     }
+}
+
+static String storageJson() {
+    String j = "{\"channels\":[";
+    for (int i = 0; i < s_settings.chanCount; i++) {
+        const ChannelStore &st = s_stores[i];
+        StoredMsg first{}, last{};
+        if (st.count()) {
+            st.copyAfter(st.tailSeq() - 1, &first, 1);
+            st.copyAfter(st.headSeq() - 1, &last, 1);
+        }
+        if (i) j += ",";
+        j += "{\"name\":\"" + String(s_settings.ch[i].name) + "\",\"count\":" + String(st.count()) +
+             ",\"capacity\":" + String(CS_MSGS_PER_CHANNEL) + ",\"oldestUnix\":" + String(first.rxUnix) +
+             ",\"newestUnix\":" + String(last.rxUnix) + ",\"textBytes\":" + String(st.textBytes()) +
+             ",\"ramBytes\":" + String(ChannelStore::ramBytes()) + ",\"fileBytes\":" + String(persistFileSize(i)) + "}";
+    }
+    size_t used, total;
+    persistUsage(used, total);
+    j += "],\"flash\":{\"usedKB\":" + String(used / 1024.0, 1) + ",\"totalKB\":" + String(total / 1024.0, 1) +
+         "},\"psram\":{\"freeKB\":" + String(ESP.getFreePsram() / 1024.0, 1) +
+         ",\"totalKB\":" + String(ESP.getPsramSize() / 1024.0, 1) + "}}";
+    return j;
 }
 
 static void clearMessages(int slot) {
@@ -170,35 +203,68 @@ static void handleChatServerPacket(const MeshPacket &pkt, uint32_t nowMs) {
     s_server.onPacket(pkt.hdr.from, slot, hopsTravelled(pkt.hdr), pkt.payload, pkt.payloadLen, nowMs);
 }
 
-#ifdef CS_SERIAL_TEST
-// Bench hook: "req <slot> <cursor>" / "disc" fake a node 0x12345678 at 0 hops.
-static void serialTestLoop(uint32_t nowMs) {
-    static String line;
+// USB serial console: "yaml-export" prints the config; "yaml-import" reads YAML
+// until a line "---end---", then validates, saves and restarts. The test build
+// (heltec-v4-test) also accepts "req <slot> <cursor>" and "disc", which fake a
+// node 0x12345678 at 0 hops.
+static void serialLoop(uint32_t nowMs) {
+    static String line, yaml;
+    static bool importing = false;
     while (Serial.available()) {
         char c = (char)Serial.read();
         if (c != '\n' && c != '\r') { line += c; continue; }
-        if (!line.length()) continue;
-        uint8_t buf[csp::MAX_PAYLOAD];
-        size_t n = 0;
-        int slot = -1;
-        unsigned long cursor = 0;
-        if (sscanf(line.c_str(), "req %d %lu", &slot, &cursor) >= 1 && slot >= 0 && slot < s_settings.chanCount) {
-            csp::Request r{cursor ? s_stores[slot].epoch() : 0, (uint32_t)cursor, 0, 0};
-            n = csp::encodeRequest(r, buf, sizeof buf);
-        } else if (line == "disc") {
-            slot = -1;
-            n = csp::encodeDiscover(buf, sizeof buf);
+        if (importing) {
+            if (line == "---end---") {
+                importing = false;
+                Settings n = s_settings;
+                char err[96] = "";
+                if (settingsFromYaml(yaml.c_str(), n, kYamlPresets, err, sizeof err)) {
+                    s_settings = n;
+                    settingsSave(n);
+                    Serial.println("[cs] yaml-import: saved, restarting");
+                    s_restartAtMs = millis() + 500;
+                } else {
+                    Serial.printf("[cs] yaml-import failed: %s\n", err);
+                }
+                yaml = "";
+            } else {
+                yaml += line + "\n";
+            }
+            line = "";
+            continue;
         }
-        if (n) {
-            Serial.printf("[cs] test: %s\n", line.c_str());
-            s_server.onPacket(0x12345678, slot, 0, buf, n, nowMs);
+        if (!line.length()) continue;
+        if (line == "yaml-export") {
+            Serial.print(settingsToYaml(s_settings, kYamlPresets).c_str());
+            Serial.println("---end---");
+        } else if (line == "yaml-import") {
+            importing = true;
+            yaml = "";
+            Serial.println("[cs] yaml-import: paste YAML, finish with a line ---end---");
+#ifdef CS_SERIAL_TEST
         } else {
-            Serial.printf("[cs] test: unknown \"%s\" (use: req <slot> <cursor> | disc)\n", line.c_str());
+            uint8_t buf[csp::MAX_PAYLOAD];
+            size_t n = 0;
+            int slot = -1;
+            unsigned long cursor = 0;
+            if (sscanf(line.c_str(), "req %d %lu", &slot, &cursor) >= 1 && slot >= 0 && slot < s_settings.chanCount) {
+                csp::Request r{cursor ? s_stores[slot].epoch() : 0, (uint32_t)cursor, 0, 0};
+                n = csp::encodeRequest(r, buf, sizeof buf);
+            } else if (line == "disc") {
+                slot = -1;
+                n = csp::encodeDiscover(buf, sizeof buf);
+            }
+            if (n) {
+                Serial.printf("[cs] test: %s\n", line.c_str());
+                s_server.onPacket(0x12345678, slot, 0, buf, n, nowMs);
+            } else {
+                Serial.printf("[cs] unknown command \"%s\"\n", line.c_str());
+            }
+#endif
         }
         line = "";
     }
 }
-#endif
 
 static void ingest(const MeshPacket &pkt, MsgSource source) {
     int slot = slotForChanIdx(pkt.chanIdx);
@@ -226,9 +292,11 @@ void setup() {
     displayBegin();
     wifiBegin();
     configTzTime(s_settings.tz, "pool.ntp.org");
-    webBegin(&s_settings, [] { s_restartAtMs = millis() + 1500; }, statusJson, listMessages, clearMessages);
+    webBegin(&s_settings, [] { s_restartAtMs = millis() + 1500; }, statusJson, listMessages, clearMessages, storageJson);
 
-    for (int i = 0; i < CS_MAX_CHANNELS; i++) {
+    static_assert(CS_MAX_CHANNELS == SETTINGS_MAX_CHANNELS, "store and settings channel limits differ");
+    // Only configured channels get a ring (~55 KB of PSRAM each).
+    for (int i = 0; i < s_settings.chanCount; i++) {
         if (!s_stores[i].begin(ps_malloc, randomU32)) Serial.printf("[cs] store %d: no PSRAM\n", i);
     }
     persistBegin();
@@ -255,9 +323,7 @@ void loop() {
         if (pkt.portnum == PORT_CHAT_SERVER) handleChatServerPacket(pkt, nowMs);
         else ingest(pkt, SRC_LORA);
     }
-#ifdef CS_SERIAL_TEST
-    serialTestLoop(nowMs);
-#endif
+    serialLoop(nowMs);
     serveLoop(nowMs);
     mqttLoop(nowMs);
 

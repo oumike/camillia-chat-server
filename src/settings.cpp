@@ -31,7 +31,8 @@ static bool fail(char *err, size_t cap, const char *msg) {
 bool settingsValidate(const Settings &s, char *err, size_t cap) {
     if (!s.shortName[0]) return fail(err, cap, "Short name is required");
     if (!s.longName[0]) return fail(err, cap, "Node name is required");
-    if (s.chanCount < 1 || s.chanCount > 3) return fail(err, cap, "Number of channels must be 1-3");
+    if (s.chanCount < 1 || s.chanCount > SETTINGS_MAX_CHANNELS)
+        return fail(err, cap, "Number of channels must be 1-10");
     for (int i = 0; i < s.chanCount; i++) {
         const ChannelCfg &c = s.ch[i];
         if (!c.name[0]) return fail(err, cap, "Every channel needs a name");

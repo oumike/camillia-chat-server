@@ -166,7 +166,10 @@ bool settingsFromYaml(const char *text, Settings &out, const YamlPresetMap &pres
             }
         } else if (section == "channels") {
             if (l.listItem) {
-                if (s.chanCount >= 3) { snprintf(err, cap, "channels: at most 3 channels"); return false; }
+                if (s.chanCount >= SETTINGS_MAX_CHANNELS) {
+                    snprintf(err, cap, "channels: at most %d channels", SETTINGS_MAX_CHANNELS);
+                    return false;
+                }
                 chan = s.chanCount++;
             }
             if (chan < 0) { snprintf(err, cap, "channels: each channel starts with \"- name:\""); return false; }

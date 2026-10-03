@@ -1,4 +1,5 @@
 #include <unity.h>
+#include <stdio.h>
 #include <string.h>
 #include "settings.h"
 
@@ -38,7 +39,11 @@ void test_validate_rejects_out_of_range() {
     settingsDefaults(s, 1); s.packetGapMs = 499; TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
     settingsDefaults(s, 1); s.maxHops = 8;      TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
     settingsDefaults(s, 1); s.chanCount = 0;    TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
-    settingsDefaults(s, 1); s.chanCount = 4;    TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
+    settingsDefaults(s, 1); s.chanCount = 11;   TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
+    settingsDefaults(s, 1);
+    s.chanCount = 10;
+    for (int i = 1; i < 10; i++) { snprintf(s.ch[i].name, sizeof s.ch[i].name, "ch%d", i); s.ch[i].keyLen = 1; s.ch[i].key[0] = 1; }
+    TEST_ASSERT_TRUE_MESSAGE(settingsValidate(s, err, sizeof err), err);   // 10 channels allowed
     settingsDefaults(s, 1); s.shortName[0] = 0; TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
 }
 

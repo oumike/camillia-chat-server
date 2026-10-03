@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-constexpr int CS_MAX_CHANNELS     = 3;
+constexpr int CS_MAX_CHANNELS     = 10;
 constexpr int CS_MSGS_PER_CHANNEL = 250;
 constexpr int CS_MAX_TEXT         = 200;
 
@@ -44,6 +44,10 @@ public:
     int copyAfter(uint32_t afterSeq, StoredMsg *out, int max) const;
 
     void reset(uint32_t newEpoch);
+
+    // Bytes of message text held, and the ring's fixed allocation.
+    size_t textBytes() const;
+    static size_t ramBytes() { return sizeof(StoredMsg) * CS_MSGS_PER_CHANNEL; }
 
     bool     dirty() const         { return _dirty; }
     uint32_t addsSinceSave() const { return _addsSinceSave; }

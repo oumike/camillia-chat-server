@@ -85,6 +85,12 @@ int ChannelStore::copyAfter(uint32_t afterSeq, StoredMsg *out, int max) const {
     return n;
 }
 
+size_t ChannelStore::textBytes() const {
+    size_t n = 0;
+    for (int i = 0; i < _count; i++) n += at(i).textLen;
+    return n;
+}
+
 void ChannelStore::reset(uint32_t newEpoch) {
     _start = 0;
     _count = 0;

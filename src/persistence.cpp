@@ -21,6 +21,17 @@ bool persistBegin() {
     return s_ok && s_buf;
 }
 
+void persistUsage(size_t &used, size_t &total) {
+    used = s_ok ? LittleFS.usedBytes() : 0;
+    total = s_ok ? LittleFS.totalBytes() : 0;
+}
+
+size_t persistFileSize(int slot) {
+    if (!s_ok) return 0;
+    File f = LittleFS.open(path(slot, ".bin"), "r");
+    return f ? f.size() : 0;
+}
+
 void persistLoadAll(ChannelStore *stores, const Settings &s) {
     for (int i = 0; i < s.chanCount; i++) {
         uint32_t id = csp::channelId(s.ch[i].name, s.ch[i].key, s.ch[i].keyLen);

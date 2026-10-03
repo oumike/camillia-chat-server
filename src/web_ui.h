@@ -13,5 +13,5 @@ using MessageClearer = std::function<void(int slot)>;
 
 void webBegin(Settings *settings, std::function<void()> onSaved,
               std::function<String()> statusJson, MessageLister listMessages,
-              MessageClearer clearMessages);
+              MessageClearer clearMessages, std::function<String()> storageJson);
 void webLoop();

@@ -19,7 +19,7 @@
 #define MESH_HW_MODEL_HELTEC_V4  110
 #define MY_HW_MODEL MESH_HW_MODEL_HELTEC_V4
 
-// 3 store channels + the camillia-cs discovery channel (always slot 3).
-#define MESH_CHANNELS     4
+// 10 store channels + the camillia-cs discovery channel (always slot 10).
+#define MESH_CHANNELS     11
 #define MAX_CHANNELS      MESH_CHANNELS
 #define MESH_TEXT_MAX_LEN 200

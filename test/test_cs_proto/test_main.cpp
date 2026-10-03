@@ -142,6 +142,23 @@ void test_channel_id_stable() {
     TEST_ASSERT_NOT_EQUAL(channelId("LongFast", psk1, 1), channelId("Longfast", psk1, 1));
 }
 
+void test_announce_ten_channels_fits() {
+    Announce a{};
+    strcpy(a.shortName, "WXYZ");
+    a.count = 10;
+    for (int i = 0; i < 10; i++) { a.ch[i].id = 0x1000u + i; strcpy(a.ch[i].name, "ElevenChars"); }
+    uint8_t buf[MAX_PAYLOAD];
+    size_t n = encodeAnnounce(a, buf, sizeof buf);
+    TEST_ASSERT_GREATER_THAN(0, n);
+    TEST_ASSERT_LESS_OR_EQUAL(MAX_PAYLOAD, n);
+    Announce b{};
+    TEST_ASSERT_TRUE(decodeAnnounce(buf, n, b));
+    TEST_ASSERT_EQUAL(10, b.count);
+    TEST_ASSERT_EQUAL_STRING("ElevenChars", b.ch[9].name);
+    a.count = 11;
+    TEST_ASSERT_EQUAL(0, encodeAnnounce(a, buf, sizeof buf));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_round_trip_each_type);
@@ -150,5 +167,6 @@ int main() {
     RUN_TEST(test_encoders_reject_small_buffer);
     RUN_TEST(test_decode_rejects);
     RUN_TEST(test_channel_id_stable);
+    RUN_TEST(test_announce_ten_channels_fits);
     return UNITY_END();
 }

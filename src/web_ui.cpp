@@ -9,6 +9,7 @@ static std::function<void()>   s_onSaved;
 static std::function<String()> s_status;
 static MessageLister           s_listMessages;
 static MessageClearer          s_clearMessages;
+static std::function<String()> s_storageJson;
 
 static const char *presetName(uint8_t i) { return i < PRESET_COUNT ? kPresets[i].channelName : nullptr; }
 static int presetIndex(const char *name) {
@@ -64,7 +65,10 @@ static String renderPage(const Settings &c, const char *error) {
            "border-bottom:3px solid transparent}.tabs button.on{border-bottom-color:#2a7ae2;font-weight:600}"
            ".msg{border-bottom:1px solid #8884;padding:8px 0}.meta{font-size:12px;opacity:.7}"
            ".txt{white-space:pre-wrap;word-break:break-word}.row{display:flex;gap:8px;align-items:end}"
-           ".row label{flex:1}"
+           ".row label{flex:1}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));"
+           "gap:8px;margin:0 0 16px}.stat{border:1px solid #8884;border-radius:6px;padding:8px}"
+           ".stat b{display:block;font-size:20px}.bar{height:6px;background:#8883;border-radius:3px;margin-top:6px}"
+           ".bar i{display:block;height:100%;background:#2a7ae2;border-radius:3px}"
            "</style></head><body><h1>Camillia Chat Server</h1>"
            "<nav class=\"tabs\"><button data-tab=\"config\">Config</button>"
            "<button data-tab=\"messages\">Messages</button></nav><section id=\"config\">");
@@ -92,16 +96,18 @@ static String renderPage(const Settings &c, const char *error) {
     h += F("</fieldset>");
 
     h += F("<fieldset><legend>Channels</legend>");
-    h += numInput("Number of channels", "chanCount", c.chanCount, 1, 3);
-    for (int i = 0; i < 3; i++) {
+    h += numInput("Number of channels (1-10)", "chanCount", c.chanCount, 1, SETTINGS_MAX_CHANNELS);
+    for (int i = 0; i < SETTINGS_MAX_CHANNELS; i++) {
         char nameField[8], keyField[8], label[24], key[48];
         snprintf(nameField, sizeof nameField, "cn%d", i);
         snprintf(keyField, sizeof keyField, "ck%d", i);
         formatKeyBase64(c.ch[i].key, c.ch[i].keyLen, key, sizeof key);
+        h += String("<div class=\"chan\" data-i=\"") + i + "\">";
         snprintf(label, sizeof label, "Channel %d name", i + 1);
         h += textInput(label, nameField, c.ch[i].name, 11);
         snprintf(label, sizeof label, "Channel %d key (base64)", i + 1);
         h += textInput(label, keyField, key, 47);
+        h += "</div>";
     }
     h += F("</fieldset>");
 
@@ -137,7 +143,8 @@ static String renderPage(const Settings &c, const char *error) {
            "<button type=\"submit\">Import and restart</button></fieldset></form>");
 
     h += F("<h2>Status</h2><pre id=\"st\">loading…</pre></section>"
-           "<section id=\"messages\" hidden><div class=\"row\"><label>Channel<select id=\"ch\">");
+           "<section id=\"messages\" hidden><div id=\"stats\" class=\"stats\"></div>"
+           "<div class=\"row\"><label>Channel<select id=\"ch\">");
     for (int i = 0; i < c.chanCount; i++) {
         h += String("<option value=\"") + i + "\">" + esc(c.ch[i].name) + "</option>";
     }
@@ -151,7 +158,25 @@ static String renderPage(const Settings &c, const char *error) {
            "function when(m){if(m.rxUnix)return new Date(m.rxUnix*1000).toLocaleString();"
            "if(m.ageSec===null)return'before last restart';const a=m.ageSec;"
            "return a<60?a+'s ago':a<3600?Math.floor(a/60)+'m ago':Math.floor(a/3600)+'h ago'}"
-           "async function load(){const l=$('list');try{const r=await fetch('/messages?ch='+$('ch').value);"
+           "function card(title,big,sub,pct){const d=document.createElement('div');d.className='stat';"
+           "const t=document.createElement('div');t.className='meta';t.textContent=title;const b=document.createElement('b');"
+           "b.textContent=big;const s=document.createElement('div');s.className='meta';s.textContent=sub;d.append(t,b,s);"
+           "if(pct!==undefined){const bar=document.createElement('div');bar.className='bar';const i=document.createElement('i');"
+           "i.style.width=Math.min(100,pct)+'%';bar.append(i);d.append(bar)}return d}"
+           "function ts(u){return u?new Date(u*1000).toLocaleString():'unknown time'}"
+           "function kb(b){return b<1024?b+' B':(b/1024).toFixed(1)+' KB'}"
+           "async function stats(){try{const r=await fetch('/storage');const st=await r.json();const cards=[];"
+           "let total=0,cap=0,ram=0,text=0,file=0;for(const c of st.channels){total+=c.count;cap+=c.capacity;"
+           "ram+=c.ramBytes;text+=c.textBytes;file+=c.fileBytes;"
+           "cards.push(card(c.name,c.count+' / '+c.capacity,(c.count?('oldest '+ts(c.oldestUnix)+', newest '+ts(c.newestUnix)+'. '):'Empty. ')"
+           "+kb(c.textBytes)+' of text in '+kb(c.ramBytes)+' RAM, '+kb(c.fileBytes)+' on flash',100*c.count/c.capacity))}"
+           "cards.unshift(card('Messages stored',total+' / '+cap,st.channels.length+' channel'+(st.channels.length==1?'':'s'),100*total/cap),"
+           "card('RAM for messages',kb(ram),kb(text)+' of message text',100*text/Math.max(ram,1)));"
+           "cards.push(card('Message files',kb(file),'saved on flash'));"
+           "cards.push(card('Flash',Math.round(st.flash.usedKB)+' KB',' of '+Math.round(st.flash.totalKB)+' KB used',100*st.flash.usedKB/st.flash.totalKB));"
+           "cards.push(card('PSRAM',Math.round(st.psram.freeKB)+' KB free','of '+Math.round(st.psram.totalKB)+' KB'));"
+           "$('stats').replaceChildren(...cards)}catch(e){}}"
+           "async function load(){stats();const l=$('list');try{const r=await fetch('/messages?ch='+$('ch').value);"
            "const ms=await r.json();$('count').textContent=ms.length+' stored message'+(ms.length==1?'':'s')+', newest first';"
            "l.replaceChildren(...ms.map(m=>{const d=document.createElement('div');d.className='msg';"
            "const meta=document.createElement('div');meta.className='meta';"
@@ -163,6 +188,8 @@ static String renderPage(const Settings &c, const char *error) {
            "$('messages').hidden=tab!='messages';if(tab=='messages')load();history.replaceState(null,'','#'+tab)}"
            "for(const b of document.querySelectorAll('.tabs button'))b.onclick=()=>show(b.dataset.tab);"
            "$('ch').onchange=load;$('refresh').onclick=load;"
+           "const cc=document.querySelector('[name=chanCount]');function rows(){const n=Math.max(3,+cc.value||1);"
+           "for(const d of document.querySelectorAll('.chan'))d.hidden=+d.dataset.i>=n}cc.oninput=rows;rows();"
            "async function clr(ch,what){if(!confirm('Delete all stored messages on '+what+'? Nodes will no longer be able to catch up on them.'))return;"
            "await fetch('/clear',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'ch='+ch});load();s()}"
            "$('clear1').onclick=()=>clr($('ch').value,$('ch').selectedOptions[0].text);"
@@ -190,7 +217,7 @@ static void handleSave() {
     n.modemPreset = (uint8_t)s_server.arg("preset").toInt();
     n.freqSlot = (uint8_t)s_server.arg("slot").toInt();
     n.chanCount = (uint8_t)s_server.arg("chanCount").toInt();
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < SETTINGS_MAX_CHANNELS; i++) {
         char f[8];
         snprintf(f, sizeof f, "cn%d", i);
         copyArg(f, n.ch[i].name, sizeof n.ch[i].name);
@@ -281,8 +308,9 @@ static void handleClear() {
 }
 
 void webBegin(Settings *settings, std::function<void()> onSaved, std::function<String()> statusJson,
-              MessageLister listMessages, MessageClearer clearMessages) {
+              MessageLister listMessages, MessageClearer clearMessages, std::function<String()> storageJson) {
     s_cfg = settings;
+    s_storageJson = storageJson;
     s_clearMessages = clearMessages;
     s_listMessages = listMessages;
     s_onSaved = onSaved;
@@ -293,6 +321,9 @@ void webBegin(Settings *settings, std::function<void()> onSaved, std::function<S
     s_server.on("/import", HTTP_POST, handleImport);
     s_server.on("/messages", HTTP_GET, handleMessages);
     s_server.on("/clear", HTTP_POST, handleClear);
+    s_server.on("/storage", HTTP_GET, [] {
+        s_server.send(200, "application/json", s_storageJson ? s_storageJson() : String("{}"));
+    });
     s_server.on("/status", HTTP_GET, [] {
         s_server.send(200, "application/json", s_status ? s_status() : String("{}"));
     });

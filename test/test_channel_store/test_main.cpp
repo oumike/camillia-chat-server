@@ -161,6 +161,18 @@ void test_reset_clears_and_changes_epoch() {
     delete s;
 }
 
+void test_text_bytes_and_ram() {
+    ChannelStore *s = fresh();
+    TEST_ASSERT_EQUAL(0, s->textBytes());
+    addMsg(*s, 1, 1, "hello");
+    addMsg(*s, 1, 2, "hi");
+    TEST_ASSERT_EQUAL(7, s->textBytes());
+    TEST_ASSERT_EQUAL(sizeof(StoredMsg) * CS_MSGS_PER_CHANNEL, ChannelStore::ramBytes());
+    s->reset(9);
+    TEST_ASSERT_EQUAL(0, s->textBytes());
+    delete s;
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_add_assigns_increasing_seq);
@@ -173,5 +185,6 @@ int main() {
     RUN_TEST(test_store_rejects_corrupt_blob);
     RUN_TEST(test_dirty_tracking);
     RUN_TEST(test_reset_clears_and_changes_epoch);
+    RUN_TEST(test_text_bytes_and_ram);
     return UNITY_END();
 }

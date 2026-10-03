@@ -92,7 +92,8 @@ void test_yaml_import_rejects_bad_input_without_changing_settings() {
     TEST_ASSERT_NOT_NULL(strstr(err, "preset"));
     TEST_ASSERT_FALSE(settingsFromYaml("channels:\n  - name: x\n    key: \"!!\"\n", b, kMap, err, sizeof err));
     TEST_ASSERT_FALSE(settingsFromYaml(
-        "channels:\n  - name: a\n  - name: b\n  - name: c\n  - name: d\n", b, kMap, err, sizeof err));
+        "channels:\n  - name: a\n  - name: b\n  - name: c\n  - name: d\n  - name: e\n  - name: f\n"
+        "  - name: g\n  - name: h\n  - name: i\n  - name: j\n  - name: k\n", b, kMap, err, sizeof err));
     TEST_ASSERT_FALSE(settingsFromYaml("replies:\n  batchSize: ten\n", b, kMap, err, sizeof err));
     TEST_ASSERT_EQUAL_MEMORY(&before, &b, sizeof(Settings));
 }
@@ -110,11 +111,23 @@ void test_yaml_channels_replace_list() {
     TEST_ASSERT_EQUAL(0, b.ch[1].keyLen);
 }
 
+void test_yaml_ten_channels() {
+    Settings b;
+    settingsDefaults(b, 1);
+    std::string y = "channels:\n";
+    for (int i = 0; i < 10; i++) y += "  - name: c" + std::to_string(i) + "\n    key: AQ==\n";
+    char err[96] = "";
+    TEST_ASSERT_TRUE_MESSAGE(settingsFromYaml(y.c_str(), b, kMap, err, sizeof err), err);
+    TEST_ASSERT_EQUAL(10, b.chanCount);
+    TEST_ASSERT_EQUAL_STRING("c9", b.ch[9].name);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_yaml_round_trip);
     RUN_TEST(test_yaml_import_keeps_unlisted_values_and_ignores_comments);
     RUN_TEST(test_yaml_import_rejects_bad_input_without_changing_settings);
     RUN_TEST(test_yaml_channels_replace_list);
+    RUN_TEST(test_yaml_ten_channels);
     return UNITY_END();
 }

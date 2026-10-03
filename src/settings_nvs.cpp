@@ -2,7 +2,7 @@
 #include <Preferences.h>
 #include "settings.h"
 
-static const uint8_t kSettingsVersion = 3;
+static const uint8_t kSettingsVersion = 4;
 
 bool settingsLoad(Settings &s) {
     Preferences p;

@@ -5,6 +5,10 @@
 #include "settings.h"
 
 bool persistBegin();
+// LittleFS bytes used / total (0/0 if not mounted).
+void persistUsage(size_t &used, size_t &total);
+// Size of a channel's saved file in bytes (0 if none).
+size_t persistFileSize(int slot);
 // Loads each configured channel; a channel whose name/key changed since it was
 // saved (or whose file is corrupt) starts empty with a new epoch.
 void persistLoadAll(ChannelStore *stores, const Settings &s);

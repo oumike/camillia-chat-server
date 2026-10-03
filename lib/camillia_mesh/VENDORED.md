@@ -4,7 +4,7 @@ Source: `camillia-mt` commit `9796a7a` (v5.6.3). Copied by hand; carry upstream 
 
 | File | Origin | Local edits |
 |---|---|---|
-| `mesh_proto.{h,cpp}` | `src/mesh_proto.*` | `CHANNEL_KEYS[]` initializer replaced with 4 disabled slots (3 store + discovery), filled at runtime by `radio_link` |
+| `mesh_proto.{h,cpp}` | `src/mesh_proto.*` | `CHANNEL_KEYS[]` initializer replaced with 11 disabled slots (10 store + discovery), filled at runtime by `radio_link` |
 | `mesh_radio.{h,cpp}` | `src/mesh_radio.*` | none (other boards' `#if DEVICE_*` branches compile out) |
 | `xeddsa.{h,cpp}` | `src/xeddsa.*` | none (needed only because `mesh_proto` links it) |
 | `mesh_channel_plan.h` | `src/mesh_channel_plan.h` | none |

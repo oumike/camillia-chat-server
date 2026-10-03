@@ -15,7 +15,7 @@ constexpr uint8_t  FLAG_TIME_VALID = 4;
 constexpr uint32_t AGE_UNKNOWN     = 0xFFFFFFFF;
 constexpr size_t   MAX_PAYLOAD     = 233;
 constexpr size_t   MAX_TEXT        = 200;
-constexpr int      MAX_ANNOUNCE_CHANNELS    = 3;
+constexpr int      MAX_ANNOUNCE_CHANNELS    = 10;   // 10 x (4+1+11) + 9 = 169 bytes max
 constexpr size_t   ITEM_OVERHEAD   = 17;   // seq, from, packetId, age, textLen
 constexpr size_t   BATCH_HEADER    = 12;   // version, type, epoch, flags, time, count
 

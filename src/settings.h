@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+constexpr int SETTINGS_MAX_CHANNELS = 10;
+
 struct ChannelCfg {
     char    name[12];
     uint8_t key[32];
@@ -17,7 +19,7 @@ struct Settings {
     uint8_t    modemPreset;   // ModemPreset index (mesh_channel_plan.h)
     uint8_t    freqSlot;      // 0 = auto (hash of the preset's channel name)
     uint8_t    chanCount;
-    ChannelCfg ch[3];
+    ChannelCfg ch[SETTINGS_MAX_CHANNELS];
     uint8_t    batchSize;
     uint16_t   packetGapMs;
     uint8_t    maxHops;
