@@ -186,6 +186,53 @@ void test_reload_keeps_sequence_contiguous() {
     delete s; delete t;
 }
 
+void test_newest_across() {
+    ChannelStore st[2];
+    TEST_ASSERT_TRUE(st[0].begin(malloc, fakeRandom));
+    TEST_ASSERT_TRUE(st[1].begin(malloc, fakeRandom));
+    // previous-boot message (as after deserialize): rxUptimeSec 0
+    std::vector<uint8_t> buf(ChannelStore::maxSerializedSize());
+    ChannelStore *old = fresh();
+    old->add(7, 1, "old", 3, 1600000000, 5, 0);
+    size_t n = old->serialize(buf.data(), buf.size());
+    TEST_ASSERT_TRUE(st[1].deserialize(buf.data(), n));
+    delete old;
+    st[0].add(1, 1, "a1", 2, 1700000001, 100, 0);
+    st[1].add(2, 1, "b1", 2, 1700000002, 200, 0);
+    st[0].add(1, 2, "a2", 2, 1700000003, 300, 0);
+    st[1].add(2, 2, "b2", 2, 1700000004, 400, 0);
+    st[0].add(1, 3, "a3", 2, 1700000005, 500, 0);
+    StoredMsg out[10]; int8_t slots[10];
+    TEST_ASSERT_EQUAL(6, newestAcross(st, 2, out, slots, 10));
+    const char *want[] = {"a3", "b2", "a2", "b1", "a1", "old"};
+    int8_t wslot[] = {0, 1, 0, 1, 0, 1};
+    for (int i = 0; i < 6; i++) {
+        TEST_ASSERT_EQUAL_STRING(want[i], out[i].text);
+        TEST_ASSERT_EQUAL(wslot[i], slots[i]);
+    }
+    TEST_ASSERT_EQUAL(3, newestAcross(st, 2, out, nullptr, 3));
+    TEST_ASSERT_EQUAL_STRING("b2", out[1].text);
+}
+
+void test_newest_across_skips_empty_and_orders_old() {
+    ChannelStore st[3];
+    for (auto &s : st) TEST_ASSERT_TRUE(s.begin(malloc, fakeRandom));
+    std::vector<uint8_t> buf(ChannelStore::maxSerializedSize());
+    ChannelStore *o1 = fresh(), *o2 = fresh();
+    o1->add(1, 1, "u1", 2, 1000, 1, 0);
+    o2->add(1, 1, "u2", 2, 2000, 1, 0);
+    size_t n = o1->serialize(buf.data(), buf.size());
+    TEST_ASSERT_TRUE(st[0].deserialize(buf.data(), n));
+    n = o2->serialize(buf.data(), buf.size());
+    TEST_ASSERT_TRUE(st[2].deserialize(buf.data(), n));
+    delete o1; delete o2;
+    StoredMsg out[4]; int8_t slots[4];
+    TEST_ASSERT_EQUAL(2, newestAcross(st, 3, out, slots, 4));
+    TEST_ASSERT_EQUAL_STRING("u2", out[0].text);
+    TEST_ASSERT_EQUAL(2, slots[0]);
+    TEST_ASSERT_EQUAL(0, slots[1]);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_add_assigns_increasing_seq);
@@ -200,5 +247,7 @@ int main() {
     RUN_TEST(test_reset_clears_and_changes_epoch);
     RUN_TEST(test_text_bytes_and_ram);
     RUN_TEST(test_reload_keeps_sequence_contiguous);
+    RUN_TEST(test_newest_across);
+    RUN_TEST(test_newest_across_skips_empty_and_orders_old);
     return UNITY_END();
 }

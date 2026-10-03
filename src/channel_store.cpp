@@ -85,6 +85,13 @@ int ChannelStore::copyAfter(uint32_t afterSeq, StoredMsg *out, int max) const {
     return n;
 }
 
+bool ChannelStore::copyBefore(uint32_t beforeSeq, StoredMsg *out) const {
+    for (int i = _count - 1; i >= 0; i--) {
+        if (at(i).seq < beforeSeq) { *out = at(i); return true; }
+    }
+    return false;
+}
+
 size_t ChannelStore::textBytes() const {
     size_t n = 0;
     for (int i = 0; i < _count; i++) n += at(i).textLen;
@@ -165,4 +172,35 @@ bool ChannelStore::deserialize(const uint8_t *in, size_t len) {
     _dirty = false;
     _addsSinceSave = 0;
     return true;
+}
+
+namespace {
+bool isNewer(const StoredMsg &a, const StoredMsg &b) {
+    if ((a.rxUptimeSec > 0) != (b.rxUptimeSec > 0)) return a.rxUptimeSec > 0;
+    if (a.rxUptimeSec > 0) return a.rxUptimeSec > b.rxUptimeSec;
+    if (a.rxUnix != b.rxUnix) return a.rxUnix > b.rxUnix;
+    return a.seq > b.seq;
+}
+}  // namespace
+
+int newestAcross(const ChannelStore *stores, int count, StoredMsg *out, int8_t *slots, int max) {
+    if (count > CS_MAX_CHANNELS) count = CS_MAX_CHANNELS;
+    StoredMsg heads[CS_MAX_CHANNELS];
+    bool live[CS_MAX_CHANNELS];
+    for (int i = 0; i < count; i++) {
+        live[i] = stores[i].count() > 0 && stores[i].copyBefore(0xFFFFFFFFu, &heads[i]);
+    }
+    int n = 0;
+    while (n < max) {
+        int best = -1;
+        for (int i = 0; i < count; i++) {
+            if (live[i] && (best < 0 || isNewer(heads[i], heads[best]))) best = i;
+        }
+        if (best < 0) break;
+        out[n] = heads[best];
+        if (slots) slots[n] = (int8_t)best;
+        n++;
+        live[best] = stores[best].copyBefore(heads[best].seq, &heads[best]);
+    }
+    return n;
 }

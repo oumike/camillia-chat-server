@@ -44,6 +44,9 @@ public:
     // Messages with seq > afterSeq, oldest first, at most `max`.
     int copyAfter(uint32_t afterSeq, StoredMsg *out, int max) const;
 
+    // Newest held message with seq < beforeSeq; false if none.
+    bool copyBefore(uint32_t beforeSeq, StoredMsg *out) const;
+
     void reset(uint32_t newEpoch);
 
     // Bytes of message text held, and the ring's fixed allocation.
@@ -72,3 +75,9 @@ private:
     bool       _dirty = false;
     uint32_t   _addsSinceSave = 0;
 };
+
+// Newest messages across stores, newest first. A message heard this boot
+// (rxUptimeSec > 0) is newer than one from a previous boot; two this-boot
+// messages compare by rxUptimeSec; two previous-boot ones by rxUnix, then seq.
+// slots[i] (may be nullptr) is the store index out[i] came from.
+int newestAcross(const ChannelStore *stores, int count, StoredMsg *out, int8_t *slots, int max);
