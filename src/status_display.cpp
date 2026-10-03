@@ -1,7 +1,6 @@
 #include "status_display.h"
 #include <Arduino.h>
 #include <SSD1306Wire.h>
-#include <time.h>
 #include "board.h"
 
 static SSD1306Wire s_oled(OLED_ADDR, OLED_SDA, OLED_SCL);
@@ -24,19 +23,9 @@ void displayUpdate(const DisplayStatus &st) {
     if (s_lastDrawMs && now - s_lastDrawMs < 1000) return;
     s_lastDrawMs = now;
 
-    char sent[32];
-    if (!st.everSent) {
-        strcpy(sent, "Sent: never");
-    } else if (st.lastSentUnix) {
-        time_t t = (time_t)st.lastSentUnix;
-        struct tm tmv;
-        localtime_r(&t, &tmv);
-        strftime(sent, sizeof sent, "Sent: %Y-%m-%d %H:%M", &tmv);
-    } else {
-        uint32_t ago = now / 1000 - st.lastSentUptimeSec;
-        if (ago < 3600) snprintf(sent, sizeof sent, "Sent: %um ago", (unsigned)(ago / 60));
-        else snprintf(sent, sizeof sent, "Sent: %uh ago", (unsigned)(ago / 3600));
-    }
+    char stored[32];
+    snprintf(stored, sizeof stored, "Stored: %d message%s", st.storedMessages,
+             st.storedMessages == 1 ? "" : "s");
     char mqtt[32];
     snprintf(mqtt, sizeof mqtt, "MQTT: %s", st.mqtt);
 
@@ -45,6 +34,6 @@ void displayUpdate(const DisplayStatus &st) {
     s_oled.drawString(0, 12, st.nodeName);
     s_oled.drawString(0, 24, st.ip);
     s_oled.drawString(0, 36, mqtt);
-    s_oled.drawString(0, 48, sent);
+    s_oled.drawString(0, 48, stored);
     s_oled.display();
 }

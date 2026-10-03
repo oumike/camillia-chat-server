@@ -7,6 +7,7 @@
 #include "channel_store.h"
 #include "cs_server.h"
 #include "messages_json.h"
+#include "mqtt_ingest.h"
 #include "mesh_channel_plan.h"
 #include "mesh_proto.h"
 #include "node_identity.h"
@@ -56,10 +57,19 @@ static void wifiBegin() {
     Serial.printf("[cs] AP %s at %s\n", ssid.c_str(), WiFi.softAPIP().toString().c_str());
 }
 
+static String lastSentJson() {
+    uint32_t unix, up;
+    if (!s_server.lastSentAt(unix, up)) return "null";
+    return unix ? String(unix) : "\"" + String(millis() / 1000 - up) + "s ago\"";
+}
+
 static String statusJson() {
+    uint32_t mqttRx, mqttDec;
+    mqttCounters(mqttRx, mqttDec);
     String j = "{\"node\":\"" + String(s_settings.longName) + "\",\"nodeId\":\"!" +
                String(s_nodeId, HEX) + "\",\"ip\":\"" + ipText() + "\",\"uptimeSec\":" +
-               String(millis() / 1000) + ",\"clockSet\":" + (timeValid() ? "true" : "false") +
+               String(millis() / 1000) + ",\"clockSet\":" + (timeValid() ? "true" : "false") + ",\"mqtt\":\"" + mqttState() + "\",\"mqttEnvelopes\":" + String(mqttRx) +
+               ",\"mqttDecrypted\":" + String(mqttDec) + ",\"mqttDropped\":" + mqttDiagJson() + ",\"lastSent\":" + lastSentJson() +
                ",\"channels\":[";
     for (int i = 0; i < s_settings.chanCount; i++) {
         if (i) j += ",";
@@ -190,15 +200,15 @@ static void serialTestLoop(uint32_t nowMs) {
 }
 #endif
 
-static void ingest(const MeshPacket &pkt) {
+static void ingest(const MeshPacket &pkt, MsgSource source) {
     int slot = slotForChanIdx(pkt.chanIdx);
     if (pkt.portnum != TEXT_MESSAGE_APP || pkt.hdr.to != 0xFFFFFFFF || slot < 0) return;
     time_t now = time(nullptr);
     bool added = s_stores[slot].add(pkt.hdr.from, pkt.hdr.id, (const char *)pkt.payload,
                                     pkt.payloadLen, timeValid() ? (uint32_t)now : 0,
-                                    millis() / 1000, SRC_LORA);
-    Serial.printf("[cs] text ch%d from !%08x id %08x: %s\n", slot, (unsigned)pkt.hdr.from,
-                  (unsigned)pkt.hdr.id, added ? "stored" : "duplicate");
+                                    millis() / 1000, source);
+    Serial.printf("[cs] text ch%d from !%08x id %08x via %s: %s\n", slot, (unsigned)pkt.hdr.from,
+                  (unsigned)pkt.hdr.id, source == SRC_MQTT ? "mqtt" : "lora", added ? "stored" : "duplicate");
 }
 
 void setup() {
@@ -225,6 +235,7 @@ void setup() {
     persistLoadAll(s_stores, s_settings);
 
     radioBegin(s_settings, s_nodeId);
+    mqttBegin(s_settings, s_nodeId, [](const MeshPacket &p) { ingest(p, SRC_MQTT); });
     serverBegin();
     identityBegin(s_settings, s_nodeId);
 }
@@ -233,15 +244,22 @@ void loop() {
     const uint32_t nowMs = millis();
     webLoop();
 
+    static bool staLogged = false;
+    if (!staLogged && WiFi.status() == WL_CONNECTED) {
+        staLogged = true;
+        Serial.printf("[cs] wifi joined \"%s\" as %s\n", s_settings.staSsid, WiFi.localIP().toString().c_str());
+    }
+
     MeshPacket pkt;
     while (radioPoll(pkt)) {
         if (pkt.portnum == PORT_CHAT_SERVER) handleChatServerPacket(pkt, nowMs);
-        else ingest(pkt);
+        else ingest(pkt, SRC_LORA);
     }
 #ifdef CS_SERIAL_TEST
     serialTestLoop(nowMs);
 #endif
     serveLoop(nowMs);
+    mqttLoop(nowMs);
 
     persistMaybeSave(s_stores, s_settings.chanCount, nowMs);
     identityLoop(nowMs);
@@ -249,8 +267,8 @@ void loop() {
     DisplayStatus st{};
     st.nodeName = s_settings.longName;
     snprintf(st.ip, sizeof st.ip, "%s", ipText().c_str());
-    st.mqtt = "off";
-    st.everSent = s_server.lastSentAt(st.lastSentUnix, st.lastSentUptimeSec);
+    st.mqtt = mqttState();
+    for (int i = 0; i < s_settings.chanCount; i++) st.storedMessages += s_stores[i].count();
     displayUpdate(st);
 
     if (s_restartAtMs && (int32_t)(nowMs - s_restartAtMs) >= 0) ESP.restart();

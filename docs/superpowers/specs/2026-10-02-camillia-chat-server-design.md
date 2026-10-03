@@ -208,10 +208,10 @@ Camillia Chat Server
 <node name>            (long name, configurable in web config)
 <IP address>
 MQTT: <off | no wifi | connecting | connected>
-Sent: <date/time of last message sent to a camillia node | never>
+Stored: <number of messages stored, all channels>
 ```
 
-"Sent" is the wall-clock time of the last `BATCH` packet sent, in local time if the server's clock is set; without a set clock it shows how long ago (for example "12m ago").
+The time of the last reply sent to a node is shown on the web status instead (`lastSent`).
 
 ### 5.7 MQTT ingest
 
