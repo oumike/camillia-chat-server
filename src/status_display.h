@@ -9,5 +9,9 @@ struct DisplayStatus {
     int         storedMessages;   // across all monitored channels
 };
 
+#define CS_VERSION "0.1.0"
+
+// Shows the splash (camillia-mt's camellia, drawn 1-bit) until displayUpdate
+// is first allowed to draw, at least kSplashMs after this call.
 void displayBegin();
 void displayUpdate(const DisplayStatus &st);   // redraws at most once a second
