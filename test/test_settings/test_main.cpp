@@ -132,6 +132,7 @@ void test_upgrade_v4_blob() {
     const size_t len = SETTINGS_V4_BLOB_LEN;
     uint8_t blob[sizeof(Settings)];
     memcpy(blob, &old, sizeof blob);
+    blob[offsetof(Settings, displayBrightness)] = 0xEE;   // stale tail padding in a real v4 blob
     Settings s;
     memset(&s, 0xEE, sizeof s);
     TEST_ASSERT_TRUE(settingsFromBlob(blob, len, 4, s));

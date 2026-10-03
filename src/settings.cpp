@@ -1,4 +1,5 @@
 #include "settings.h"
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #include "cs_proto.h"
@@ -36,7 +37,8 @@ bool settingsFromBlob(const uint8_t *blob, size_t len, uint8_t ver, Settings &ou
     if (ver == 4) {
         if (len != SETTINGS_V4_BLOB_LEN) return false;
         settingsDefaults(out, 0);
-        memcpy(&out, blob, len);
+        // Copy only up to displayBrightness: the last blob byte(s) are tail padding.
+        memcpy(&out, blob, offsetof(Settings, displayBrightness));
         return true;
     }
     return false;
