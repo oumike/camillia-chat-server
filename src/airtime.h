@@ -13,6 +13,8 @@ public:
     // True if sending airMs now keeps the last hour's transmit time within limitPct.
     bool canSend(uint32_t nowMs, uint32_t airMs, uint8_t limitPct);
     void record(uint32_t nowMs, uint32_t airMs);
+    // Transmit time in the last hour (expires old entries first).
+    uint32_t usedMs(uint32_t nowMs);
 
 private:
     static constexpr int CAP = 512;

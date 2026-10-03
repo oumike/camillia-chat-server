@@ -51,6 +51,14 @@ void test_budget_full_log_never_undercounts() {
     TEST_ASSERT_FALSE(b.canSend(2000, 1, 10));               // 400 s > 360 s: still refused
 }
 
+void test_used_ms() {
+    AirtimeBudget b;
+    b.record(0, 1000);
+    b.record(1800000, 500);
+    TEST_ASSERT_EQUAL_UINT32(1500, b.usedMs(1900000));
+    TEST_ASSERT_EQUAL_UINT32(500, b.usedMs(3600001));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_time_on_air_longfast);
@@ -60,5 +68,6 @@ int main() {
     RUN_TEST(test_budget_unlimited_at_100);
     RUN_TEST(test_budget_survives_millis_wrap);
     RUN_TEST(test_budget_full_log_never_undercounts);
+    RUN_TEST(test_used_ms);
     return UNITY_END();
 }

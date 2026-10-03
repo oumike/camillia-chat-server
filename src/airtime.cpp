@@ -37,3 +37,8 @@ void AirtimeBudget::record(uint32_t nowMs, uint32_t airMs) {
     _count++;
     _sum += airMs;
 }
+
+uint32_t AirtimeBudget::usedMs(uint32_t nowMs) {
+    expire(nowMs);
+    return (uint32_t)_sum;
+}
