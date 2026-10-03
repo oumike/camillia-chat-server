@@ -55,6 +55,9 @@ public:
     bool poll(uint32_t nowMs, uint32_t nowUnix, bool timeValid, uint32_t nowUptimeSec,
               Outgoing &out);
 
+    // Forget queued and in-progress replies for a store slot (its messages were cleared).
+    void clearSlot(int slot);
+
     int  queueLength() const { return _qLen; }
     bool busy() const        { return _txIdx < _txCount; }
 

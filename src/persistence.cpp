@@ -57,6 +57,10 @@ static void save(ChannelStore &st, int i) {
     if (LittleFS.rename(tmp, dst)) st.markSaved();
 }
 
+void persistSaveNow(ChannelStore &store, int slot) {
+    if (s_ok && s_buf) save(store, slot);
+}
+
 void persistMaybeSave(ChannelStore *stores, int n, uint32_t nowMs) {
     if (!s_ok || !s_buf) return;
     for (int i = 0; i < n; i++) {

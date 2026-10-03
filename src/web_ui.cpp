@@ -8,6 +8,7 @@ static Settings               *s_cfg = nullptr;
 static std::function<void()>   s_onSaved;
 static std::function<String()> s_status;
 static MessageLister           s_listMessages;
+static MessageClearer          s_clearMessages;
 
 static const char *presetName(uint8_t i) { return i < PRESET_COUNT ? kPresets[i].channelName : nullptr; }
 static int presetIndex(const char *name) {
@@ -141,6 +142,8 @@ static String renderPage(const Settings &c, const char *error) {
         h += String("<option value=\"") + i + "\">" + esc(c.ch[i].name) + "</option>";
     }
     h += F("</select></label><button id=\"refresh\" type=\"button\">Refresh</button></div>"
+           "<div class=\"row\" style=\"margin-top:8px\"><button id=\"clear1\" type=\"button\">Clear this channel</button>"
+           "<button id=\"clearAll\" type=\"button\">Clear all channels</button></div>"
            "<p id=\"count\" class=\"meta\"></p><div id=\"list\"></div></section><script>"
            "const $=id=>document.getElementById(id);"
            "async function s(){try{const r=await fetch('/status');"
@@ -160,6 +163,10 @@ static String renderPage(const Settings &c, const char *error) {
            "$('messages').hidden=tab!='messages';if(tab=='messages')load();history.replaceState(null,'','#'+tab)}"
            "for(const b of document.querySelectorAll('.tabs button'))b.onclick=()=>show(b.dataset.tab);"
            "$('ch').onchange=load;$('refresh').onclick=load;"
+           "async function clr(ch,what){if(!confirm('Delete all stored messages on '+what+'? Nodes will no longer be able to catch up on them.'))return;"
+           "await fetch('/clear',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'ch='+ch});load();s()}"
+           "$('clear1').onclick=()=>clr($('ch').value,$('ch').selectedOptions[0].text);"
+           "$('clearAll').onclick=()=>clr('all','every channel');"
            "setInterval(()=>{if(!$('messages').hidden)load()},15000);"
            "show(location.hash=='#messages'?'messages':'config');s();setInterval(s,5000)"
            "</script></body></html>");
@@ -262,9 +269,21 @@ static void handleMessages() {
     s_server.sendContent("");
 }
 
+static void handleClear() {
+    String ch = s_server.arg("ch");
+    int slot = ch == "all" ? -1 : ch.toInt();
+    if (!s_clearMessages || (ch != "all" && (ch.isEmpty() || slot < 0 || slot >= s_cfg->chanCount))) {
+        s_server.send(400, "application/json", "{\"ok\":false}");
+        return;
+    }
+    s_clearMessages(slot);
+    s_server.send(200, "application/json", "{\"ok\":true}");
+}
+
 void webBegin(Settings *settings, std::function<void()> onSaved, std::function<String()> statusJson,
-              MessageLister listMessages) {
+              MessageLister listMessages, MessageClearer clearMessages) {
     s_cfg = settings;
+    s_clearMessages = clearMessages;
     s_listMessages = listMessages;
     s_onSaved = onSaved;
     s_status = statusJson;
@@ -273,6 +292,7 @@ void webBegin(Settings *settings, std::function<void()> onSaved, std::function<S
     s_server.on("/export.yaml", HTTP_GET, handleExport);
     s_server.on("/import", HTTP_POST, handleImport);
     s_server.on("/messages", HTTP_GET, handleMessages);
+    s_server.on("/clear", HTTP_POST, handleClear);
     s_server.on("/status", HTTP_GET, [] {
         s_server.send(200, "application/json", s_status ? s_status() : String("{}"));
     });

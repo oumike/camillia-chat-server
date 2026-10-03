@@ -299,6 +299,21 @@ void test_last_sent_at_tracks_batch_packets() {
     TEST_ASSERT_EQUAL_UINT32(77, up);
 }
 
+void test_clear_slot_drops_pending_and_active() {
+    Rig rig(25, 150);
+    rig.request(0xA, 0, 0, 0);
+    Outgoing o;
+    TEST_ASSERT_TRUE(rig.poll(0, o));          // transfer to A on slot 0 under way
+    rig.request(0xB, 0, 0, 0);                 // queued, slot 0
+    rig.request(0xC, 1, 0, 0);                 // queued, slot 1
+    rig.server.clearSlot(0);
+    TEST_ASSERT_FALSE(rig.server.busy());
+    TEST_ASSERT_EQUAL(1, rig.server.queueLength());
+    TEST_ASSERT_TRUE(rig.poll(3000, o));
+    TEST_ASSERT_EQUAL_HEX32(0xC, o.to);
+    TEST_ASSERT_EQUAL(1, o.chanSlot);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_since_uses_cursor_when_epoch_matches);
@@ -320,5 +335,6 @@ int main() {
     RUN_TEST(test_queue_replaces_duplicate_requester);
     RUN_TEST(test_serves_fifo_one_at_a_time);
     RUN_TEST(test_last_sent_at_tracks_batch_packets);
+    RUN_TEST(test_clear_slot_drops_pending_and_active);
     return UNITY_END();
 }

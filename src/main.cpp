@@ -83,6 +83,17 @@ static void listMessages(int slot, const std::function<void(const char *)> &emit
     }
 }
 
+static void clearMessages(int slot) {
+    for (int i = 0; i < s_settings.chanCount; i++) {
+        if (slot != -1 && slot != i) continue;
+        s_server.clearSlot(i);
+        s_stores[i].reset(esp_random());   // new epoch: nodes' cursors fall back cleanly
+        persistSaveNow(s_stores[i], i);
+        Serial.printf("[cs] cleared channel %d \"%s\", new epoch %08x\n", i, s_settings.ch[i].name,
+                      (unsigned)s_stores[i].epoch());
+    }
+}
+
 static const PresetParams &preset() {
     return kPresets[s_settings.modemPreset < PRESET_COUNT ? s_settings.modemPreset : PRESET_LONG_FAST];
 }
@@ -205,7 +216,7 @@ void setup() {
     displayBegin();
     wifiBegin();
     configTzTime(s_settings.tz, "pool.ntp.org");
-    webBegin(&s_settings, [] { s_restartAtMs = millis() + 1500; }, statusJson, listMessages);
+    webBegin(&s_settings, [] { s_restartAtMs = millis() + 1500; }, statusJson, listMessages, clearMessages);
 
     for (int i = 0; i < CS_MAX_CHANNELS; i++) {
         if (!s_stores[i].begin(ps_malloc, randomU32)) Serial.printf("[cs] store %d: no PSRAM\n", i);

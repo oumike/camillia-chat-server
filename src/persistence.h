@@ -9,4 +9,6 @@ bool persistBegin();
 // saved (or whose file is corrupt) starts empty with a new epoch.
 void persistLoadAll(ChannelStore *stores, const Settings &s);
 // Saves a store when dirty and (60 s since its last save or >= 20 new messages).
+// Writes one store now (after a clear), regardless of the save schedule.
+void persistSaveNow(ChannelStore &store, int slot);
 void persistMaybeSave(ChannelStore *stores, int n, uint32_t nowMs);

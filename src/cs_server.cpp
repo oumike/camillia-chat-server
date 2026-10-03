@@ -121,6 +121,13 @@ void CsServer::startNext(uint32_t nowUnix, bool timeValid, uint32_t nowUptimeSec
     _txHops = p.hops;
 }
 
+void CsServer::clearSlot(int slot) {
+    int w = 0;
+    for (int i = 0; i < _qLen; i++) if (_q[i].slot != slot) _q[w++] = _q[i];
+    _qLen = w;
+    if (busy() && _txSlot == slot) _txIdx = _txCount = 0;
+}
+
 bool CsServer::poll(uint32_t nowMs, uint32_t nowUnix, bool timeValid, uint32_t nowUptimeSec,
                     Outgoing &out) {
     if (_sentAny && (int32_t)(nowMs - _nextSendMs) < 0) return false;

@@ -182,7 +182,7 @@ The server has a normal Meshtastic node ID and short/long name, set in web confi
 
 Reached through the server's own WiFi access point, and optionally through a home WiFi network (STA) when configured.
 
-Two tabs: **Config** (the settings below, status, and backup) and **Messages** (stored messages for one monitored channel, picked from a drop-down, newest first, showing time, sender, source LoRa/MQTT and text; refreshes every 15 s while open).
+Two tabs: **Config** (the settings below, status, and backup) and **Messages** (stored messages for one monitored channel, picked from a drop-down, newest first, showing time, sender, source LoRa/MQTT and text; refreshes every 15 s while open). The Messages tab can also **clear** the selected channel or all channels, after a confirmation; a cleared channel gets a new epoch and is saved immediately, and any queued or in-progress replies for it are dropped.
 
 | Section | Settings | Default |
 |---|---|---|
