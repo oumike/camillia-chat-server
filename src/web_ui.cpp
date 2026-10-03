@@ -1,11 +1,22 @@
 #include "web_ui.h"
 #include <WebServer.h>
 #include "mesh_channel_plan.h"
+#include "settings_yaml.h"
 
 static WebServer               s_server(80);
 static Settings               *s_cfg = nullptr;
 static std::function<void()>   s_onSaved;
 static std::function<String()> s_status;
+
+static const char *presetName(uint8_t i) { return i < PRESET_COUNT ? kPresets[i].channelName : nullptr; }
+static int presetIndex(const char *name) {
+    for (uint8_t i = 0; i < PRESET_COUNT; i++) {
+        if (!strcmp(kPresets[i].channelName, name) || !strcmp(kPresets[i].name, name))
+            return presetUsableOnThisRadio(i) ? i : -1;
+    }
+    return -1;
+}
+static const YamlPresetMap kPresetMap{presetName, presetIndex};
 
 static String esc(const char *in) {
     String o;
@@ -106,6 +117,15 @@ static String renderPage(const Settings &c, const char *error) {
     h += textInput("Time zone (POSIX TZ, for the screen clock)", "tz", c.tz, 47);
     h += F("</fieldset><button type=\"submit\">Save and restart</button></form>");
 
+    h += F("<h2>Backup</h2><p><a href=\"/export.yaml\">Export config (YAML)</a> &mdash; "
+           "the file includes channel keys and passwords.</p>"
+           "<form method=\"post\" action=\"/import\"><fieldset><legend>Import config (YAML)</legend>"
+           "<label>File<input type=\"file\" accept=\".yaml,.yml,text/yaml,text/plain\" "
+           "onchange=\"const f=this.files[0];if(f)f.text().then(t=>this.form.yaml.value=t)\"></label>"
+           "<label>Or paste<textarea name=\"yaml\" rows=\"8\" style=\"width:100%;box-sizing:border-box;"
+           "font-family:monospace\"></textarea></label>"
+           "<button type=\"submit\">Import and restart</button></fieldset></form>");
+
     h += F("<h2>Status</h2><pre id=\"st\">loading…</pre><script>"
            "async function s(){try{const r=await fetch('/status');"
            "document.getElementById('st').textContent=JSON.stringify(await r.json(),null,2)}catch(e){}}"
@@ -118,6 +138,8 @@ static void copyArg(const char *name, char *dst, size_t cap) {
     strncpy(dst, s_server.arg(name).c_str(), cap - 1);
     dst[cap - 1] = 0;
 }
+
+static void commit(const Settings &n);
 
 static void handleSave() {
     Settings n = *s_cfg;
@@ -156,6 +178,27 @@ static void handleSave() {
         s_server.send(400, "text/html", renderPage(n, err));
         return;
     }
+    commit(n);
+}
+
+static void handleExport() {
+    String name = String("camillia-cs-") + s_cfg->shortName + ".yaml";
+    s_server.sendHeader("Content-Disposition", "attachment; filename=\"" + name + "\"");
+    s_server.send(200, "application/x-yaml", settingsToYaml(*s_cfg, kPresetMap).c_str());
+}
+
+static void handleImport() {
+    Settings n = *s_cfg;
+    char err[96] = "";
+    if (!settingsFromYaml(s_server.arg("yaml").c_str(), n, kPresetMap, err, sizeof err)) {
+        String msg = String("Import failed: ") + err;
+        s_server.send(400, "text/html", renderPage(*s_cfg, msg.c_str()));
+        return;
+    }
+    commit(n);
+}
+
+static void commit(const Settings &n) {
     *s_cfg = n;
     settingsSave(n);
     s_server.send(200, "text/html",
@@ -171,6 +214,8 @@ void webBegin(Settings *settings, std::function<void()> onSaved, std::function<S
     s_status = statusJson;
     s_server.on("/", HTTP_GET, [] { s_server.send(200, "text/html", renderPage(*s_cfg, nullptr)); });
     s_server.on("/save", HTTP_POST, handleSave);
+    s_server.on("/export.yaml", HTTP_GET, handleExport);
+    s_server.on("/import", HTTP_POST, handleImport);
     s_server.on("/status", HTTP_GET, [] {
         s_server.send(200, "application/json", s_status ? s_status() : String("{}"));
     });

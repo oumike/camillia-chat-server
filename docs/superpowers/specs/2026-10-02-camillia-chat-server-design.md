@@ -193,6 +193,7 @@ Reached through the server's own WiFi access point, and optionally through a hom
 | MQTT | Enabled, broker, port, username, password, topic root | Off |
 | WiFi | Optional STA SSID/password (also used for NTP). The config AP `camillia-cs-<short name>` is always open (no password) | AP only |
 | Status | Per-channel message counts, last message heard, MQTT state, queue length | — |
+| Backup | **Export** the whole config as a YAML file; **Import** a YAML file (upload or paste). Import validates first, then saves and restarts; keys it doesn't mention keep their values. The file includes channel keys and passwords | — |
 
 With the defaults, clearing a full 250-message channel takes about 25 rounds of about 70 seconds each. In regions with a duty-cycle limit (for example EU 868 at 10%), the server must throttle its replies to stay within the limit, even if that is slower than the configured pacing.
 
