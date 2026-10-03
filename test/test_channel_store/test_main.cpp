@@ -116,7 +116,7 @@ void test_serialize_round_trip() {
     TEST_ASSERT_EQUAL_UINT32(0, m[16].rxUptimeSec);   // loaded = previous boot
     TEST_ASSERT_FALSE(t->add(3, 5, "dup", 3, 0, 1, 0)); // dedupe survives a reload
     TEST_ASSERT_TRUE(t->add(3, 31, "new", 3, 0, 1, 0));
-    TEST_ASSERT_EQUAL_UINT32(30 + CS_SEQ_RESERVE + 1, t->headSeq());
+    TEST_ASSERT_EQUAL_UINT32(31, t->headSeq());
     delete s; delete t;
 }
 
@@ -173,45 +173,16 @@ void test_text_bytes_and_ram() {
     delete s;
 }
 
-void test_reload_reserves_sequence_numbers() {
-    // Messages served after the last save are lost on power-cut; their sequence
-    // numbers must never be handed to different messages under the same epoch.
+void test_reload_keeps_sequence_contiguous() {
     ChannelStore *s = fresh();
     for (uint32_t i = 1; i <= 30; i++) addMsg(*s, 3, i, "x");
     std::vector<uint8_t> buf(ChannelStore::maxSerializedSize());
     size_t n = s->serialize(buf.data(), buf.size());
-
     ChannelStore *t = fresh();
     TEST_ASSERT_TRUE(t->deserialize(buf.data(), n));
-    TEST_ASSERT_EQUAL_UINT32(30, t->headSeq());          // newest held message
-    TEST_ASSERT_EQUAL_UINT32(1, t->tailSeq());
+    TEST_ASSERT_EQUAL_UINT32(30, t->headSeq());
     TEST_ASSERT_TRUE(t->add(9, 1, "after reboot", 12, 0, 1, 0));
-    TEST_ASSERT_EQUAL_UINT32(30 + CS_SEQ_RESERVE + 1, t->headSeq());
-    StoredMsg out[40];
-    TEST_ASSERT_EQUAL(1, t->copyAfter(30, out, 40));
-    TEST_ASSERT_EQUAL_UINT32(30 + CS_SEQ_RESERVE + 1, out[0].seq);
-
-    // The gap survives another save/load.
-    n = t->serialize(buf.data(), buf.size());
-    ChannelStore *u = fresh();
-    TEST_ASSERT_TRUE(u->deserialize(buf.data(), n));
-    TEST_ASSERT_EQUAL(31, u->count());
-    TEST_ASSERT_EQUAL_UINT32(1, u->tailSeq());
-    TEST_ASSERT_EQUAL_UINT32(30 + CS_SEQ_RESERVE + 1, u->headSeq());
-    delete s; delete t; delete u;
-}
-
-void test_ring_with_seq_gap_drops_oldest() {
-    ChannelStore *s = fresh();
-    for (uint32_t i = 1; i <= 10; i++) addMsg(*s, 3, i, "x");
-    std::vector<uint8_t> buf(ChannelStore::maxSerializedSize());
-    size_t n = s->serialize(buf.data(), buf.size());
-    ChannelStore *t = fresh();
-    t->deserialize(buf.data(), n);
-    for (uint32_t i = 11; i <= 250; i++) addMsg(*t, 3, i, "x");   // ring full: 250 held
-    TEST_ASSERT_EQUAL(250, t->count());
-    addMsg(*t, 3, 251, "x");                                       // evicts seq 1
-    TEST_ASSERT_EQUAL_UINT32(2, t->tailSeq());
+    TEST_ASSERT_EQUAL_UINT32(31, t->headSeq());
     delete s; delete t;
 }
 
@@ -228,7 +199,6 @@ int main() {
     RUN_TEST(test_dirty_tracking);
     RUN_TEST(test_reset_clears_and_changes_epoch);
     RUN_TEST(test_text_bytes_and_ram);
-    RUN_TEST(test_reload_reserves_sequence_numbers);
-    RUN_TEST(test_ring_with_seq_gap_drops_oldest);
+    RUN_TEST(test_reload_keeps_sequence_contiguous);
     return UNITY_END();
 }

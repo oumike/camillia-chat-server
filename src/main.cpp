@@ -152,6 +152,9 @@ static void serverBegin() {
     cfg.batchSize = s_settings.batchSize;
     cfg.packetGapMs = s_settings.packetGapMs;
     cfg.myNodeId = s_nodeId;
+    cfg.beforeServe = [](int slot) {
+        if (s_stores[slot].dirty()) persistSaveNow(s_stores[slot], slot);
+    };
     strncpy(cfg.shortName, s_settings.shortName, sizeof(cfg.shortName) - 1);
     static uint32_t ids[CS_MAX_CHANNELS];
     static char names[CS_MAX_CHANNELS][12];
@@ -172,8 +175,9 @@ static void logOutgoing(const Outgoing &o, bool ok) {
         static csp::Item items[16];
         uint8_t n = 0;
         if (csp::decodeBatch(o.payload, o.len, h, items, 16, n)) {
-            Serial.printf("[cs] tx BATCH to !%08x ch%d hops %u: %u item(s)%s%s, seq %lu..%lu, %u bytes %s\n",
+            Serial.printf("[cs] tx BATCH to !%08x ch%d hops %u: %u item(s)%s%s%s, seq %lu..%lu, %u bytes %s\n",
                           (unsigned)o.to, o.chanSlot, o.hopLimit, n,
+                          (h.flags & csp::FLAG_FIRST) ? " FIRST" : "",
                           (h.flags & csp::FLAG_LAST) ? " LAST" : "", (h.flags & csp::FLAG_MORE) ? " MORE" : "",
                           n ? (unsigned long)items[0].seq : 0UL, n ? (unsigned long)items[n - 1].seq : 0UL,
                           (unsigned)o.len, ok ? "ok" : "FAILED");

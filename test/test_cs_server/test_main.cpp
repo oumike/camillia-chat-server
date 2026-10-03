@@ -135,7 +135,7 @@ void test_pack_empty_sends_one_last_packet() {
     BatchHeader h; Item items[1]; uint8_t n;
     TEST_ASSERT_TRUE(decodeBatch(packets[0], lens[0], h, items, 1, n));
     TEST_ASSERT_EQUAL(0, n);
-    TEST_ASSERT_EQUAL(FLAG_LAST, h.flags);
+    TEST_ASSERT_EQUAL(FLAG_FIRST | FLAG_LAST, h.flags);
     TEST_ASSERT_EQUAL_UINT32(9, h.epoch);
 }
 
@@ -150,6 +150,25 @@ void test_pack_never_exceeds_radio_limit() {
     int np = packItems(m, 2, 0, false, 0, 1, false, packets, lens, 4);
     TEST_ASSERT_EQUAL(2, np);
     for (int i = 0; i < np; i++) TEST_ASSERT_LESS_OR_EQUAL(231, lens[i]);
+}
+
+void test_pack_first_flag_only_on_first_packet() {
+    ChannelStore *s = storeWith(10, 150);
+    StoredMsg msgs[10];
+    s->copyAfter(0, msgs, 10);
+    uint8_t packets[16][MAX_PAYLOAD];
+    size_t lens[16];
+    int np = packItems(msgs, 10, 0, false, 0, 1, false, packets, lens, 16);
+    for (int i = 0; i < np; i++) {
+        BatchHeader h; Item items[8]; uint8_t n;
+        TEST_ASSERT_TRUE(decodeBatch(packets[i], lens[i], h, items, 8, n));
+        TEST_ASSERT_EQUAL(i == 0, (h.flags & FLAG_FIRST) != 0);
+    }
+    TEST_ASSERT_EQUAL(1, packItems(nullptr, 0, 0, false, 0, 1, false, packets, lens, 16));
+    BatchHeader h; Item items[1]; uint8_t n;
+    decodeBatch(packets[0], lens[0], h, items, 1, n);
+    TEST_ASSERT_EQUAL(FLAG_FIRST | FLAG_LAST, h.flags);
+    delete s;
 }
 
 // ── Task 5: CsServer queue, hops, pacing ─────────────────────────
@@ -376,6 +395,24 @@ void test_request_matching_active_transfer_ignored() {
     TEST_ASSERT_EQUAL(0, rig.server.queueLength());
 }
 
+void test_before_serve_called_before_first_packet() {
+    Rig rig(3, 5);
+    static int calls = 0, lastSlot = -1;
+    calls = 0; lastSlot = -1;
+    ServerConfig cfg;
+    strcpy(cfg.shortName, "CSRV");
+    cfg.myNodeId = ME;
+    cfg.beforeServe = [](int slot) { calls++; lastSlot = slot; };
+    rig.server.begin(cfg, rig.stores, rig.ids, rig.names, 2);
+    rig.stores[1].add(0xAB, 1, "x", 1, 0, 5, 0);
+    rig.request(0xA, 1, 0, 0);
+    TEST_ASSERT_EQUAL(0, calls);
+    Outgoing o;
+    TEST_ASSERT_TRUE(rig.poll(0, o));
+    TEST_ASSERT_EQUAL(1, calls);
+    TEST_ASSERT_EQUAL(1, lastSlot);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_since_uses_cursor_when_epoch_matches);
@@ -404,5 +441,7 @@ int main() {
     RUN_TEST(test_relayed_duplicate_request_ignored_after_dequeue);
     RUN_TEST(test_relayed_duplicate_discover_ignored);
     RUN_TEST(test_request_matching_active_transfer_ignored);
+    RUN_TEST(test_pack_first_flag_only_on_first_packet);
+    RUN_TEST(test_before_serve_called_before_first_packet);
     return UNITY_END();
 }

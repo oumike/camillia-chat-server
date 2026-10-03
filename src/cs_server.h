@@ -2,6 +2,7 @@
 // Server-side protocol logic (spec §4.4–4.5). Pure C++, no Arduino.
 #include <stddef.h>
 #include <stdint.h>
+#include <functional>
 #include "channel_store.h"
 #include "cs_proto.h"
 
@@ -35,6 +36,10 @@ struct ServerConfig {
     uint16_t packetGapMs = 3000;
     char     shortName[5] = "";
     uint32_t myNodeId = 0;   // REQUESTs must be addressed to us
+    // Called with the store slot just before a transfer's first packet is built.
+    // The device saves a dirty store here, so every seq a node sees is on flash
+    // and can never be reused for a different message after a power cut.
+    std::function<void(int slot)> beforeServe;
 };
 
 struct Outgoing {

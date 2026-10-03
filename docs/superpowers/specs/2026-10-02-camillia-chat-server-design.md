@@ -88,7 +88,7 @@ A node's channel and a server's channel **match** when both name and key are ide
 | Field | Size | Notes |
 |---|---|---|
 | store epoch | 4 | Random ID created when the server's store for this channel is created |
-| flags | 1 | bit0 `LAST` (last packet of this batch), bit1 `MORE` (more messages after this batch), bit2 `TIME_VALID` |
+| flags | 1 | bit0 `LAST` (last packet of this batch), bit1 `MORE` (more messages after this batch), bit2 `TIME_VALID`, bit3 `FIRST` (first packet of this batch) |
 | server time | 4 | Unix time; only meaningful if `TIME_VALID` |
 | item count | 1 | |
 | items | | Each: sequence (4), sender (4), packet ID (4), age in seconds (4; `0xFFFFFFFF` = unknown), text length (1), text (≤200) |
@@ -103,7 +103,7 @@ Clocks are not trusted: a node can have no time, or a wrong time it can't detect
 2. **Anchor.** Otherwise, if the server holds the anchor message (sender + packet ID), send everything after it.
 3. **Everything.** Otherwise, send the whole store for that channel.
 
-Every server message has a **sequence number**, increasing per channel and saved with the store. If the server's store is wiped, it gets a new epoch, so stale cursors fall through to the anchor or "everything".
+Every server message has a **sequence number**, increasing by 1 per channel and saved with the store. The server saves a channel to flash before serving it, so a number a node has seen is never reused for a different message, even after a power cut. Because numbers are contiguous, a node detects a lost packet as a gap: a `FIRST` packet sets its position, and each later packet in the batch must start at position + 1, or the node stops advancing and re-requests from there. If the server's store is wiped, it gets a new epoch, so stale cursors fall through to the anchor or "everything".
 
 The node drops any message it already has (same sender and packet ID), so overlap is harmless.
 

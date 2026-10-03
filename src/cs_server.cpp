@@ -54,7 +54,7 @@ int packItems(const StoredMsg *msgs, int n, uint32_t nowUnix, bool timeValid,
             memcpy(it.text, m.text, m.textLen);
             used += sz; i++;
         }
-        h.flags = baseFlags;
+        h.flags = baseFlags | (np == 0 ? FLAG_FIRST : 0);
         if (i >= n) h.flags |= FLAG_LAST | (moreAfterBatch ? FLAG_MORE : 0);
         h.count = k;
         lens[np] = encodeBatch(h, items, k, packets[np], MAX_PAYLOAD);
@@ -126,6 +126,7 @@ void CsServer::startNext(uint32_t nowUnix, bool timeValid, uint32_t nowUptimeSec
     memmove(_q, _q + 1, sizeof(Pending) * (size_t)(_qLen - 1));
     _qLen--;
 
+    if (_cfg.beforeServe) _cfg.beforeServe(p.slot);
     const ChannelStore &store = _stores[p.slot];
     BatchPlan plan = planBatch(store, selectStart(store, p.req), _cfg.batchSize, _msgs);
     _txCount = packItems(_msgs, plan.count, nowUnix, timeValid, nowUptimeSec, store.epoch(),

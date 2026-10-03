@@ -160,7 +160,7 @@ bool ChannelStore::deserialize(const uint8_t *in, size_t len) {
     }
     _start = 0;
     _count = count;
-    _lastSeq = lastSeq + CS_SEQ_RESERVE;
+    _lastSeq = lastSeq;
     _epoch = epoch;
     _dirty = false;
     _addsSinceSave = 0;

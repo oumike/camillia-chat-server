@@ -12,6 +12,7 @@ enum Type : uint8_t { DISCOVER = 1, ANNOUNCE = 2, REQUEST = 3, BATCH = 4 };
 constexpr uint8_t  FLAG_LAST       = 1;
 constexpr uint8_t  FLAG_MORE       = 2;
 constexpr uint8_t  FLAG_TIME_VALID = 4;
+constexpr uint8_t  FLAG_FIRST      = 8;   // first packet of a batch: the client resyncs its gap check here
 constexpr uint32_t AGE_UNKNOWN     = 0xFFFFFFFF;
 // SX1262 max frame 255 - 16-byte Meshtastic header - 8 bytes of Data framing
 // for port 256 (portnum, payload tag+len, bitfield) = 231. Not Meshtastic's 233.
