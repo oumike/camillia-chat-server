@@ -7,6 +7,7 @@ static WebServer               s_server(80);
 static Settings               *s_cfg = nullptr;
 static std::function<void()>   s_onSaved;
 static std::function<String()> s_status;
+static MessageLister           s_listMessages;
 
 static const char *presetName(uint8_t i) { return i < PRESET_COUNT ? kPresets[i].channelName : nullptr; }
 static int presetIndex(const char *name) {
@@ -57,7 +58,15 @@ static String renderPage(const Settings &c, const char *error) {
            "padding:6px;border:1px solid #aaa;border-radius:4px}input[type=checkbox]{display:inline;width:auto}"
            ".err{background:#c0392b;color:#fff;padding:8px;border-radius:4px}"
            "button{padding:10px 20px;font-size:16px}pre{white-space:pre-wrap;font-size:13px}"
-           "</style></head><body><h1>Camillia Chat Server</h1>");
+           ".tabs{display:flex;gap:4px;margin:0 0 16px;border-bottom:1px solid #8886}"
+           ".tabs button{border:0;background:none;color:inherit;padding:8px 16px;cursor:pointer;"
+           "border-bottom:3px solid transparent}.tabs button.on{border-bottom-color:#2a7ae2;font-weight:600}"
+           ".msg{border-bottom:1px solid #8884;padding:8px 0}.meta{font-size:12px;opacity:.7}"
+           ".txt{white-space:pre-wrap;word-break:break-word}.row{display:flex;gap:8px;align-items:end}"
+           ".row label{flex:1}"
+           "</style></head><body><h1>Camillia Chat Server</h1>"
+           "<nav class=\"tabs\"><button data-tab=\"config\">Config</button>"
+           "<button data-tab=\"messages\">Messages</button></nav><section id=\"config\">");
     if (error && error[0]) h += String("<p class=\"err\">") + esc(error) + "</p>";
     h += F("<form method=\"post\" action=\"/save\">");
 
@@ -126,10 +135,34 @@ static String renderPage(const Settings &c, const char *error) {
            "font-family:monospace\"></textarea></label>"
            "<button type=\"submit\">Import and restart</button></fieldset></form>");
 
-    h += F("<h2>Status</h2><pre id=\"st\">loading…</pre><script>"
+    h += F("<h2>Status</h2><pre id=\"st\">loading…</pre></section>"
+           "<section id=\"messages\" hidden><div class=\"row\"><label>Channel<select id=\"ch\">");
+    for (int i = 0; i < c.chanCount; i++) {
+        h += String("<option value=\"") + i + "\">" + esc(c.ch[i].name) + "</option>";
+    }
+    h += F("</select></label><button id=\"refresh\" type=\"button\">Refresh</button></div>"
+           "<p id=\"count\" class=\"meta\"></p><div id=\"list\"></div></section><script>"
+           "const $=id=>document.getElementById(id);"
            "async function s(){try{const r=await fetch('/status');"
-           "document.getElementById('st').textContent=JSON.stringify(await r.json(),null,2)}catch(e){}}"
-           "s();setInterval(s,5000)</script></body></html>");
+           "$('st').textContent=JSON.stringify(await r.json(),null,2)}catch(e){}}"
+           "function when(m){if(m.rxUnix)return new Date(m.rxUnix*1000).toLocaleString();"
+           "if(m.ageSec===null)return'before last restart';const a=m.ageSec;"
+           "return a<60?a+'s ago':a<3600?Math.floor(a/60)+'m ago':Math.floor(a/3600)+'h ago'}"
+           "async function load(){const l=$('list');try{const r=await fetch('/messages?ch='+$('ch').value);"
+           "const ms=await r.json();$('count').textContent=ms.length+' stored message'+(ms.length==1?'':'s')+', newest first';"
+           "l.replaceChildren(...ms.map(m=>{const d=document.createElement('div');d.className='msg';"
+           "const meta=document.createElement('div');meta.className='meta';"
+           "meta.textContent=when(m)+' \u00b7 '+m.from+' \u00b7 '+m.source+' \u00b7 #'+m.seq;"
+           "const t=document.createElement('div');t.className='txt';t.textContent=m.text;"
+           "d.append(meta,t);return d}))}catch(e){$('count').textContent='Could not load messages'}}"
+           "function show(tab){for(const b of document.querySelectorAll('.tabs button'))"
+           "b.classList.toggle('on',b.dataset.tab==tab);$('config').hidden=tab!='config';"
+           "$('messages').hidden=tab!='messages';if(tab=='messages')load();history.replaceState(null,'','#'+tab)}"
+           "for(const b of document.querySelectorAll('.tabs button'))b.onclick=()=>show(b.dataset.tab);"
+           "$('ch').onchange=load;$('refresh').onclick=load;"
+           "setInterval(()=>{if(!$('messages').hidden)load()},15000);"
+           "show(location.hash=='#messages'?'messages':'config');s();setInterval(s,5000)"
+           "</script></body></html>");
     return h;
 }
 
@@ -208,14 +241,38 @@ static void commit(const Settings &n) {
     if (s_onSaved) s_onSaved();
 }
 
-void webBegin(Settings *settings, std::function<void()> onSaved, std::function<String()> statusJson) {
+static void handleMessages() {
+    int slot = s_server.arg("ch").toInt();
+    if (slot < 0 || slot >= s_cfg->chanCount || !s_listMessages) {
+        s_server.send(200, "application/json", "[]");
+        return;
+    }
+    s_server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    s_server.send(200, "application/json", "");
+    bool first = true;
+    String chunk = "[";
+    s_listMessages(slot, [&](const char *json) {
+        if (!first) chunk += ",";
+        first = false;
+        chunk += json;
+        if (chunk.length() > 2048) { s_server.sendContent(chunk); chunk = ""; }
+    });
+    chunk += "]";
+    s_server.sendContent(chunk);
+    s_server.sendContent("");
+}
+
+void webBegin(Settings *settings, std::function<void()> onSaved, std::function<String()> statusJson,
+              MessageLister listMessages) {
     s_cfg = settings;
+    s_listMessages = listMessages;
     s_onSaved = onSaved;
     s_status = statusJson;
     s_server.on("/", HTTP_GET, [] { s_server.send(200, "text/html", renderPage(*s_cfg, nullptr)); });
     s_server.on("/save", HTTP_POST, handleSave);
     s_server.on("/export.yaml", HTTP_GET, handleExport);
     s_server.on("/import", HTTP_POST, handleImport);
+    s_server.on("/messages", HTTP_GET, handleMessages);
     s_server.on("/status", HTTP_GET, [] {
         s_server.send(200, "application/json", s_status ? s_status() : String("{}"));
     });

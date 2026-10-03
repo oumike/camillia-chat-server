@@ -182,6 +182,8 @@ The server has a normal Meshtastic node ID and short/long name, set in web confi
 
 Reached through the server's own WiFi access point, and optionally through a home WiFi network (STA) when configured.
 
+Two tabs: **Config** (the settings below, status, and backup) and **Messages** (stored messages for one monitored channel, picked from a drop-down, newest first, showing time, sender, source LoRa/MQTT and text; refreshes every 15 s while open).
+
 | Section | Settings | Default |
 |---|---|---|
 | Identity | Short name, long name | Derived from MAC |

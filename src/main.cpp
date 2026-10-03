@@ -4,6 +4,8 @@
 #include <esp_mac.h>
 #include <time.h>
 #include "channel_store.h"
+#include "cs_server.h"
+#include "messages_json.h"
 #include "mesh_proto.h"
 #include "node_identity.h"
 #include "persistence.h"
@@ -21,6 +23,7 @@ static Settings     s_settings;
 static uint32_t     s_nodeId = 0;
 static uint32_t     s_restartAtMs = 0;
 static ChannelStore s_stores[CS_MAX_CHANNELS];
+static StoredMsg   *s_listBuf = nullptr;   // PSRAM scratch for the Messages tab
 
 static uint32_t nodeIdFromMac() {
     uint8_t mac[6];
@@ -59,6 +62,19 @@ static String statusJson() {
     return j;
 }
 
+static void listMessages(int slot, const std::function<void(const char *)> &emit) {
+    if (!s_listBuf) s_listBuf = (StoredMsg *)ps_malloc(sizeof(StoredMsg) * CS_MSGS_PER_CHANNEL);
+    if (!s_listBuf) return;
+    const ChannelStore &st = s_stores[slot];
+    int n = st.copyAfter(st.tailSeq() - 1, s_listBuf, CS_MSGS_PER_CHANNEL);
+    uint32_t nowUnix = (uint32_t)time(nullptr), up = millis() / 1000;
+    char json[600];
+    for (int i = n - 1; i >= 0; i--) {
+        uint32_t age = messageAgeSec(s_listBuf[i], nowUnix, timeValid(), up);
+        if (messageJson(s_listBuf[i], age, json, sizeof json)) emit(json);
+    }
+}
+
 static void ingest(const MeshPacket &pkt) {
     int slot = slotForChanIdx(pkt.chanIdx);
     if (pkt.portnum != TEXT_MESSAGE_APP || pkt.hdr.to != 0xFFFFFFFF || slot < 0) return;
@@ -85,7 +101,7 @@ void setup() {
     displayBegin();
     wifiBegin();
     configTzTime(s_settings.tz, "pool.ntp.org");
-    webBegin(&s_settings, [] { s_restartAtMs = millis() + 1500; }, statusJson);
+    webBegin(&s_settings, [] { s_restartAtMs = millis() + 1500; }, statusJson, listMessages);
 
     for (int i = 0; i < CS_MAX_CHANNELS; i++) {
         if (!s_stores[i].begin(ps_malloc, randomU32)) Serial.printf("[cs] store %d: no PSRAM\n", i);

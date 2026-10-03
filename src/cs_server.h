@@ -8,6 +8,9 @@
 // Seq the reply should start *after*: cursor, then anchor, then everything.
 uint32_t selectStart(const ChannelStore &store, const csp::Request &req);
 
+// Seconds since the server heard m, or csp::AGE_UNKNOWN (stored before a reboot, clock unset).
+uint32_t messageAgeSec(const StoredMsg &m, uint32_t nowUnix, bool timeValid, uint32_t nowUptimeSec);
+
 struct BatchPlan { int count; bool more; };
 // Up to batchSize messages after afterSeq into out; `more` if any remain beyond them.
 BatchPlan planBatch(const ChannelStore &store, uint32_t afterSeq, int batchSize, StoredMsg *out);

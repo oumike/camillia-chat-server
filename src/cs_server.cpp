@@ -23,7 +23,7 @@ BatchPlan planBatch(const ChannelStore &store, uint32_t afterSeq, int batchSize,
     return p;
 }
 
-static uint32_t ageOf(const StoredMsg &m, uint32_t nowUnix, bool timeValid, uint32_t nowUptimeSec) {
+uint32_t messageAgeSec(const StoredMsg &m, uint32_t nowUnix, bool timeValid, uint32_t nowUptimeSec) {
     if (timeValid && m.rxUnix && nowUnix >= m.rxUnix) return nowUnix - m.rxUnix;
     if (m.rxUptimeSec) return nowUptimeSec >= m.rxUptimeSec ? nowUptimeSec - m.rxUptimeSec : 0;
     return AGE_UNKNOWN;
@@ -49,7 +49,7 @@ int packItems(const StoredMsg *msgs, int n, uint32_t nowUnix, bool timeValid,
             if (used + sz > MAX_PAYLOAD) break;
             Item &it = items[k++];
             it.seq = m.seq; it.from = m.from; it.packetId = m.packetId;
-            it.ageSec = ageOf(m, nowUnix, timeValid, nowUptimeSec);
+            it.ageSec = messageAgeSec(m, nowUnix, timeValid, nowUptimeSec);
             it.textLen = m.textLen;
             memcpy(it.text, m.text, m.textLen);
             used += sz; i++;
