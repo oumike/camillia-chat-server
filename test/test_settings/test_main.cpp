@@ -1,5 +1,6 @@
 #include <unity.h>
 #include <stdio.h>
+#include <stddef.h>
 #include <string.h>
 #include "settings.h"
 
@@ -88,11 +89,82 @@ void test_key_base64_round_trip() {
     TEST_ASSERT_FALSE(parseKeyBase64("AAAAAAAA", key, len));   // 6 bytes: not a valid key size
 }
 
+void test_display_defaults() {
+    Settings s;
+    char err[96];
+    settingsDefaults(s, 1);
+    TEST_ASSERT_EQUAL(160, s.displayBrightness);
+    TEST_ASSERT_EQUAL(120, s.displayDimAfterSec);
+    TEST_ASSERT_EQUAL(0, s.displayDimLevel);
+    TEST_ASSERT_EQUAL(30, s.displayPageSec);
+    TEST_ASSERT_TRUE(settingsValidate(s, err, sizeof err));
+}
+
+void test_display_ranges() {
+    Settings s;
+    char err[96];
+    settingsDefaults(s, 1); s.displayBrightness = 9;
+    TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
+    TEST_ASSERT_NOT_NULL(strstr(err, "brightness"));
+    settingsDefaults(s, 1); s.displayDimAfterSec = 3601;
+    TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
+    TEST_ASSERT_NOT_NULL(strstr(err, "Dim after"));
+    settingsDefaults(s, 1); s.displayDimLevel = 160;
+    TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
+    TEST_ASSERT_NOT_NULL(strstr(err, "Dim level"));
+    settingsDefaults(s, 1); s.displayPageSec = 9;
+    TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
+    TEST_ASSERT_NOT_NULL(strstr(err, "Page time"));
+    settingsDefaults(s, 1); s.displayPageSec = 301;
+    TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
+    TEST_ASSERT_NOT_NULL(strstr(err, "Page time"));
+
+    settingsDefaults(s, 1);
+    s.displayBrightness = 255; s.displayDimLevel = 254; s.displayDimAfterSec = 0; s.displayPageSec = 10;
+    TEST_ASSERT_TRUE(settingsValidate(s, err, sizeof err));
+}
+
+void test_upgrade_v4_blob() {
+    Settings old;
+    settingsDefaults(old, 1);
+    strcpy(old.longName, "Old");
+    old.chanCount = 2;
+    const size_t len = SETTINGS_V4_BLOB_LEN;
+    uint8_t blob[sizeof(Settings)];
+    memcpy(blob, &old, sizeof blob);
+    Settings s;
+    memset(&s, 0xEE, sizeof s);
+    TEST_ASSERT_TRUE(settingsFromBlob(blob, len, 4, s));
+    TEST_ASSERT_EQUAL_STRING("Old", s.longName);
+    TEST_ASSERT_EQUAL(2, s.chanCount);
+    TEST_ASSERT_EQUAL(160, s.displayBrightness);
+    TEST_ASSERT_EQUAL(30, s.displayPageSec);
+}
+
+void test_blob_current_and_bad() {
+    Settings a, b;
+    settingsDefaults(a, 1);
+    a.displayPageSec = 77;
+    strcpy(a.longName, "Cur");
+    uint8_t blob[sizeof(Settings)];
+    memcpy(blob, &a, sizeof blob);
+    TEST_ASSERT_TRUE(settingsFromBlob(blob, sizeof blob, 5, b));
+    TEST_ASSERT_EQUAL_STRING("Cur", b.longName);
+    TEST_ASSERT_EQUAL(77, b.displayPageSec);
+    TEST_ASSERT_FALSE(settingsFromBlob(blob, sizeof blob - 1, 5, b));
+    TEST_ASSERT_FALSE(settingsFromBlob(blob, sizeof blob, 4, b));
+    TEST_ASSERT_FALSE(settingsFromBlob(blob, SETTINGS_V4_BLOB_LEN, 3, b));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_defaults);
     RUN_TEST(test_validate_rejects_out_of_range);
     RUN_TEST(test_validate_channels);
     RUN_TEST(test_key_base64_round_trip);
+    RUN_TEST(test_display_defaults);
+    RUN_TEST(test_display_ranges);
+    RUN_TEST(test_upgrade_v4_blob);
+    RUN_TEST(test_blob_current_and_bad);
     return UNITY_END();
 }

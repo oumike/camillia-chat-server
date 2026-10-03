@@ -229,9 +229,9 @@ New fields in `Settings`, with defaults and range checks in `settingsValidate`, 
 | Field | YAML key | Default | Range |
 |---|---|---|---|
 | `displayBrightness` | `display.brightness` | 160 | 10–255 |
-| `displayDimAfterSec` | `display.dim_after_sec` | 120 | 0 (never) – 3600 |
-| `displayDimLevel` | `display.dim_level` | 0 | 0–255, must be below brightness |
-| `displayPageSec` | `display.page_sec` | 30 | 10–300 |
+| `displayDimAfterSec` | `display.dimAfterSec` | 120 | 0 (never) – 3600 |
+| `displayDimLevel` | `display.dimLevel` | 0 | 0–255, must be below brightness |
+| `displayPageSec` | `display.pageSec` | 30 | 10–300 |
 
 Both builds store and validate these, so a YAML export moves between boards unchanged. The web block notes "Used by the TFT expansion build only". If an NVS blob from before this change is shorter, the defaults are used, following whatever versioning `settings_nvs.cpp` already does.
 

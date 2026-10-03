@@ -32,7 +32,17 @@ struct Settings {
     char       staSsid[33];
     char       staPass[64];
     char       tz[48];        // POSIX TZ string for the OLED clock
+    // Display settings (TFT expansion build; stored and validated on every build).
+    uint8_t    displayBrightness;    // 10-255
+    uint16_t   displayDimAfterSec;   // 0 = never dim
+    uint8_t    displayDimLevel;      // 0-255, below displayBrightness
+    uint16_t   displayPageSec;       // 10-300
 };
+
+// Length of a version-4 NVS blob: the old struct ended at tz and its sizeof was
+// padded up to alignof(Settings), so the blob is offsetof() rounded up to that.
+constexpr size_t SETTINGS_V4_BLOB_LEN =
+    (offsetof(Settings, displayBrightness) + alignof(Settings) - 1) / alignof(Settings) * alignof(Settings);
 
 void settingsDefaults(Settings &s, uint32_t nodeId);
 // False with a human-readable reason in err if anything is out of range.
@@ -41,6 +51,10 @@ bool settingsValidate(const Settings &s, char *err, size_t errCap);
 // Meshtastic-style base64 PSK ("AQ==", 16 or 32 bytes, or empty for none).
 bool parseKeyBase64(const char *in, uint8_t key[32], uint8_t &len);
 void formatKeyBase64(const uint8_t *key, uint8_t len, char *out, size_t cap);
+
+// Rebuild Settings from a stored NVS blob (pure). Version 5 is the current layout;
+// version 4 predates the display fields, which then take their defaults.
+bool settingsFromBlob(const uint8_t *blob, size_t len, uint8_t ver, Settings &out);
 
 // Device only (settings_nvs.cpp).
 bool settingsLoad(Settings &s);

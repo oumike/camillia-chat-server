@@ -128,6 +128,13 @@ static String renderPage(const Settings &c, const char *error) {
     h += textInput("Topic root", "mqttRoot", c.mqttRoot, 47);
     h += F("</fieldset>");
 
+    h += F("<fieldset><legend>Display</legend>");
+    h += numInput("Screen brightness (10-255)", "dispBright", c.displayBrightness, 10, 255);
+    h += numInput("Dim after (s, 0 = never)", "dispDim", c.displayDimAfterSec, 0, 3600);
+    h += numInput("Dimmed brightness (0-254)", "dispDimLvl", c.displayDimLevel, 0, 254);
+    h += numInput("Page change time (s)", "dispPage", c.displayPageSec, 10, 300);
+    h += F("<p>Used by the TFT expansion build only.</p></fieldset>");
+
     h += F("<fieldset><legend>WiFi</legend>");
     h += textInput("Home WiFi SSID (optional)", "staSsid", c.staSsid, 32);
     h += textInput("Home WiFi password", "staPass", c.staPass, 63, "password");
@@ -240,6 +247,10 @@ static void handleSave() {
     copyArg("staSsid", n.staSsid, sizeof n.staSsid);
     copyArg("staPass", n.staPass, sizeof n.staPass);
     copyArg("tz", n.tz, sizeof n.tz);
+    n.displayBrightness = (uint8_t)constrain(s_server.arg("dispBright").toInt(), 0, 255);
+    n.displayDimAfterSec = (uint16_t)constrain(s_server.arg("dispDim").toInt(), 0, 65535);
+    n.displayDimLevel = (uint8_t)constrain(s_server.arg("dispDimLvl").toInt(), 0, 255);
+    n.displayPageSec = (uint16_t)constrain(s_server.arg("dispPage").toInt(), 0, 65535);
 
     if (!err[0]) settingsValidateDevice(n, err, sizeof err);
     if (err[0]) {

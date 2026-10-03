@@ -21,6 +21,25 @@ void settingsDefaults(Settings &s, uint32_t nodeId) {
     s.mqttPort = 1883;
     strcpy(s.mqttRoot, "msh/US");
     strcpy(s.tz, "EST5EDT,M3.2.0,M11.1.0");
+    s.displayBrightness = 160;
+    s.displayDimAfterSec = 120;
+    s.displayDimLevel = 0;
+    s.displayPageSec = 30;
+}
+
+bool settingsFromBlob(const uint8_t *blob, size_t len, uint8_t ver, Settings &out) {
+    if (ver == 5) {
+        if (len != sizeof(Settings)) return false;
+        memcpy(&out, blob, sizeof(Settings));
+        return true;
+    }
+    if (ver == 4) {
+        if (len != SETTINGS_V4_BLOB_LEN) return false;
+        settingsDefaults(out, 0);
+        memcpy(&out, blob, len);
+        return true;
+    }
+    return false;
 }
 
 static bool fail(char *err, size_t cap, const char *msg) {
@@ -48,6 +67,10 @@ bool settingsValidate(const Settings &s, char *err, size_t cap) {
         return fail(err, cap, "Packet gap must be 500-60000 ms");
     if (s.maxHops > 7) return fail(err, cap, "Max hops must be 0-7");
     if (s.mqttEnabled && !s.mqttHost[0]) return fail(err, cap, "MQTT broker is required when MQTT is on");
+    if (s.displayBrightness < 10) return fail(err, cap, "Screen brightness must be 10-255");
+    if (s.displayDimAfterSec > 3600) return fail(err, cap, "Dim after must be 0-3600 s");
+    if (s.displayDimLevel >= s.displayBrightness) return fail(err, cap, "Dim level must be below brightness");
+    if (s.displayPageSec < 10 || s.displayPageSec > 300) return fail(err, cap, "Page time must be 10-300 s");
     return true;
 }
 

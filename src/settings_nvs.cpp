@@ -2,14 +2,16 @@
 #include <Preferences.h>
 #include "settings.h"
 
-static const uint8_t kSettingsVersion = 4;
+static const uint8_t kSettingsVersion = 5;
 
 bool settingsLoad(Settings &s) {
     Preferences p;
     if (!p.begin("cs", true)) return false;
-    bool ok = p.getUChar("ver", 0) == kSettingsVersion &&
-              p.getBytesLength("blob") == sizeof(Settings) &&
-              p.getBytes("blob", &s, sizeof(Settings)) == sizeof(Settings);
+    uint8_t buf[sizeof(Settings)];
+    size_t len = p.getBytesLength("blob");
+    bool ok = len > 0 && len <= sizeof buf &&
+              p.getBytes("blob", buf, len) == len &&
+              settingsFromBlob(buf, len, p.getUChar("ver", 0), s);
     p.end();
     return ok;
 }

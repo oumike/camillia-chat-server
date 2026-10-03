@@ -110,6 +110,11 @@ std::string settingsToYaml(const Settings &s, const YamlPresetMap &presets) {
     kv(y, "  ", "ssid", quote(s.staSsid));
     kv(y, "  ", "password", quote(s.staPass));
     kv(y, "  ", "timezone", quote(s.tz));
+    y += "display:\n";
+    kv(y, "  ", "brightness", num(s.displayBrightness));
+    kv(y, "  ", "dimAfterSec", num(s.displayDimAfterSec));
+    kv(y, "  ", "dimLevel", num(s.displayDimLevel));
+    kv(y, "  ", "pageSec", num(s.displayPageSec));
     return y;
 }
 
@@ -198,6 +203,11 @@ bool settingsFromYaml(const char *text, Settings &out, const YamlPresetMap &pres
             if (k == "ssid") setStr(s.staSsid, sizeof s.staSsid, v);
             else if (k == "password") setStr(s.staPass, sizeof s.staPass, v);
             else if (k == "timezone") setStr(s.tz, sizeof s.tz, v);
+        } else if (section == "display") {
+            if (k == "brightness") { if (!toLong(v, 10, 255, n)) return bad("brightness"); s.displayBrightness = (uint8_t)n; }
+            else if (k == "dimAfterSec") { if (!toLong(v, 0, 3600, n)) return bad("dimAfterSec"); s.displayDimAfterSec = (uint16_t)n; }
+            else if (k == "dimLevel") { if (!toLong(v, 0, 255, n)) return bad("dimLevel"); s.displayDimLevel = (uint8_t)n; }
+            else if (k == "pageSec") { if (!toLong(v, 10, 300, n)) return bad("pageSec"); s.displayPageSec = (uint16_t)n; }
         }
     }
 

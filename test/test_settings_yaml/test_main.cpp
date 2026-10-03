@@ -122,6 +122,28 @@ void test_yaml_ten_channels() {
     TEST_ASSERT_EQUAL_STRING("c9", b.ch[9].name);
 }
 
+void test_display_roundtrip() {
+    Settings a, b;
+    settingsDefaults(a, 1);
+    a.displayBrightness = 200; a.displayDimAfterSec = 600; a.displayDimLevel = 20; a.displayPageSec = 45;
+    std::string y = settingsToYaml(a, kMap);
+    settingsDefaults(b, 1);
+    char err[96] = "";
+    TEST_ASSERT_TRUE_MESSAGE(settingsFromYaml(y.c_str(), b, kMap, err, sizeof err), err);
+    TEST_ASSERT_EQUAL(200, b.displayBrightness);
+    TEST_ASSERT_EQUAL(600, b.displayDimAfterSec);
+    TEST_ASSERT_EQUAL(20, b.displayDimLevel);
+    TEST_ASSERT_EQUAL(45, b.displayPageSec);
+}
+
+void test_display_bad_value() {
+    Settings b;
+    settingsDefaults(b, 1);
+    char err[96] = "";
+    TEST_ASSERT_FALSE(settingsFromYaml("display:\n  pageSec: 5\n", b, kMap, err, sizeof err));
+    TEST_ASSERT_NOT_NULL(strstr(err, "pageSec"));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_yaml_round_trip);
@@ -129,5 +151,7 @@ int main() {
     RUN_TEST(test_yaml_import_rejects_bad_input_without_changing_settings);
     RUN_TEST(test_yaml_channels_replace_list);
     RUN_TEST(test_yaml_ten_channels);
+    RUN_TEST(test_display_roundtrip);
+    RUN_TEST(test_display_bad_value);
     return UNITY_END();
 }
