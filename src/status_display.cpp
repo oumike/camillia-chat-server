@@ -3,6 +3,7 @@
 #include <SSD1306Wire.h>
 #include "board.h"
 #include <math.h>
+#include "battery_level.h"
 
 static SSD1306Wire s_oled(OLED_ADDR, OLED_SDA, OLED_SCL);
 static uint32_t    s_lastDrawMs = 0;
@@ -73,6 +74,24 @@ void displayBegin() {
     s_oled.setFont(ArialMT_Plain_10);
 }
 
+// Top-right battery: 13x7 outline + nub, filled by charge; a "+" when on USB
+// power; nothing when no cell is connected.
+static void drawBattery(const DisplayStatus &st) {
+    if (st.battState == BATT_ABSENT) return;
+    const int x = 113, y = 1, w = 13, h = 7;
+    s_oled.setColor(WHITE);
+    s_oled.drawRect(x, y, w, h);
+    s_oled.fillRect(x + w, y + 2, 2, h - 4);
+    if (st.battState == BATT_EXTERNAL) {
+        s_oled.drawHorizontalLine(x + 4, y + 3, 5);
+        s_oled.drawVerticalLine(x + 6, y + 1, 5);
+        return;
+    }
+    int fill = (int)lroundf((w - 4) * st.battPct / 100.0f);
+    if (fill < 1 && st.battPct > 0) fill = 1;
+    if (fill > 0) s_oled.fillRect(x + 2, y + 2, fill, h - 4);
+}
+
 void displayUpdate(const DisplayStatus &st) {
     uint32_t now = millis();
     if ((int32_t)(now - s_splashUntilMs) < 0) return;
@@ -86,7 +105,10 @@ void displayUpdate(const DisplayStatus &st) {
     snprintf(mqtt, sizeof mqtt, "MQTT: %s", st.mqtt);
 
     s_oled.clear();
-    s_oled.drawString(0, 0, "Camillia Chat Server");
+    const char *title = "Camillia Chat Server";
+    if (st.battState != BATT_ABSENT && s_oled.getStringWidth(title) > 110) title = "Camillia CS";
+    s_oled.drawString(0, 0, title);
+    drawBattery(st);
     s_oled.drawString(0, 12, st.nodeName);
     s_oled.drawString(0, 24, st.ip);
     s_oled.drawString(0, 36, mqtt);

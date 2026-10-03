@@ -211,7 +211,7 @@ MQTT: <off | no wifi | connecting | connected>
 Stored: <number of messages stored, all channels>
 ```
 
-The time of the last reply sent to a node is shown on the web status instead (`lastSent`).
+The time of the last reply sent to a node is shown on the web status instead (`lastSent`). A battery icon sits at the top right: an outline filled by charge (same Li-ion curve as camillia-mt), a "+" on USB power, hidden when no battery is connected; the voltage is also in the web status (`batteryV`).
 
 At boot, a splash shows for 3 seconds before the status page: camillia-mt's camellia drawn in 1 bit (white petals with black edges, dark centre with stamens, stem and leaves) beside "Camillia / Chat Server / v<version>".
 

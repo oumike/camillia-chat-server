@@ -4,6 +4,8 @@
 #include <esp_mac.h>
 #include <time.h>
 #include "airtime.h"
+#include "battery.h"
+#include "battery_level.h"
 #include "channel_store.h"
 #include "cs_server.h"
 #include "messages_json.h"
@@ -78,7 +80,7 @@ static String statusJson() {
     mqttCounters(mqttRx, mqttDec);
     String j = "{\"node\":\"" + String(s_settings.longName) + "\",\"nodeId\":\"!" +
                String(s_nodeId, HEX) + "\",\"ip\":\"" + ipText() + "\",\"uptimeSec\":" +
-               String(millis() / 1000) + ",\"clockSet\":" + (timeValid() ? "true" : "false") + ",\"mqtt\":\"" + mqttState() + "\",\"mqttEnvelopes\":" + String(mqttRx) +
+               String(millis() / 1000) + ",\"clockSet\":" + (timeValid() ? "true" : "false") + ",\"batteryV\":" + String(batteryVolts(), 2) + ",\"mqtt\":\"" + mqttState() + "\",\"mqttEnvelopes\":" + String(mqttRx) +
                ",\"mqttDecrypted\":" + String(mqttDec) + ",\"mqttDropped\":" + mqttDiagJson() + ",\"lastSent\":" + lastSentJson() +
                ",\"channels\":[";
     for (int i = 0; i < s_settings.chanCount; i++) {
@@ -298,6 +300,7 @@ void setup() {
                   s_settings.shortName);
 
     displayBegin();
+    batteryBegin();
     wifiBegin();
     configTzTime(s_settings.tz, "pool.ntp.org");
     webBegin(&s_settings, [] { s_restartAtMs = millis() + 1500; }, statusJson, listMessages, clearMessages, storageJson);
@@ -333,6 +336,7 @@ void loop() {
     }
     serialLoop(nowMs);
     serveLoop(nowMs);
+    batteryLoop(nowMs);
     mqttLoop(nowMs);
 
     persistMaybeSave(s_stores, s_settings.chanCount, nowMs);
@@ -343,6 +347,8 @@ void loop() {
     snprintf(st.ip, sizeof st.ip, "%s", ipText().c_str());
     st.mqtt = mqttState();
     for (int i = 0; i < s_settings.chanCount; i++) st.storedMessages += s_stores[i].count();
+    st.battState = batteryStateFromVolts(batteryVolts());
+    st.battPct = batteryPercentFromVolts(batteryVolts());
     displayUpdate(st);
 
     if (s_restartAtMs && (int32_t)(nowMs - s_restartAtMs) >= 0) {

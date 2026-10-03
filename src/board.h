@@ -22,3 +22,10 @@
 #define OLED_ADDR           0x3C
 #define VEXT_PIN              36
 #define VEXT_ON_LEVEL        LOW
+
+// Battery — divider on GPIO1, switched by a sense-enable line (camillia-mt's
+// hw_heltec_v4.h values) so the divider does not drain the cell between reads.
+#define BATT_ADC_PIN           1
+#define BATT_DIV         5.1205f
+#define BATT_SENSE_PIN        37
+#define BATT_SENSE_ON        LOW

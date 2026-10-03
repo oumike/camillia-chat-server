@@ -7,6 +7,8 @@ struct DisplayStatus {
     char        ip[24];
     const char *mqtt;
     int         storedMessages;   // across all monitored channels
+    uint8_t     battState;        // BatteryState (battery_level.h)
+    uint8_t     battPct;
 };
 
 #define CS_VERSION "0.1.0"
