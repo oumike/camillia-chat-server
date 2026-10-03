@@ -1,0 +1,105 @@
+name: Release
+
+# Cuts a release end to end: picks the version, takes the notes, runs the tests,
+# builds, tags and publishes the factory image. The same shape as camillia-mt's
+# release.yml, minus OTA: there is no OTA image and no signing key, because the
+# chat server is updated over USB with the published flash.sh.
+#
+# Manual-only: a release is always something a human asked for, from the
+# Actions tab or from `./scripts/release.sh` (which writes and reviews the notes
+# locally, commits them, and dispatches this workflow).
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Release channel'
+        type: choice
+        options: [stable, alpha]
+        default: stable
+      version:
+        description: 'Exact version, e.g. 0.2.0 (blank = bump the latest tag)'
+        type: string
+        default: ''
+      notes:
+        description: 'Release notes source'
+        type: choice
+        options: [committed, generate]
+        default: committed
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write        # push the release commit and tag, create the release
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # release.sh derives the next version from the full tag list.
+          fetch-depth: 0
+
+      - name: Configure git for the release commit
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config push.default current
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache PlatformIO toolchains
+        # Toolchains only; never .pio/, so a release cannot pick up stale objects.
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio-${{ runner.os }}-
+
+      - name: Install PlatformIO and esptool
+        # Pinned for the same reason as camillia-mt: esptool 5 renamed merge_bin.
+        run: pip install platformio 'esptool==4.11.0'
+
+      - name: Install the device framework
+        # release.sh checks for boot_app0.bin before it builds anything, and that
+        # file only exists once the Arduino ESP32 framework has been downloaded.
+        run: pio pkg install -e heltec-v4
+
+      - name: Cut the release
+        id: cut
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Only consulted when notes=generate.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CHANNEL: ${{ inputs.channel }}
+          REQ_VERSION: ${{ inputs.version }}
+          NOTES_SOURCE: ${{ inputs.notes }}
+        run: |
+          set -euo pipefail
+          # Fresh checkout, no .pio/: the fullclean has nothing to clean.
+          args=(-y --no-clean)
+          if [ "$CHANNEL" = "alpha" ]; then args+=(--alpha); fi
+          if [ -n "$REQ_VERSION" ]; then args+=(--version "$REQ_VERSION"); fi
+          if [ "$NOTES_SOURCE" = "committed" ]; then args+=(--use-committed-notes); fi
+          ./scripts/release.sh "${args[@]}"
+          echo "tag=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Archive debug symbols
+        # They match the published image exactly; this is what a crash
+        # backtrace symbolicates against.
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-symbols-${{ steps.cut.outputs.tag }}
+          path: dist/*.elf
+          retention-days: 90

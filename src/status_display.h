@@ -11,7 +11,10 @@ struct DisplayStatus {
     uint8_t     battPct;
 };
 
-#define CS_VERSION "0.1.0"
+// Set from the VERSION file by tools/set_app_version.py.
+#ifndef CS_VERSION
+#define CS_VERSION "dev"
+#endif
 
 // Shows the splash (camillia-mt's camellia, drawn 1-bit) until displayUpdate
 // is first allowed to draw, at least kSplashMs after this call.

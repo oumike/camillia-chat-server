@@ -1,0 +1,50 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+    # Pushes that cannot change the binary or the tests.
+    paths-ignore:
+      - 'docs/**'
+      - 'README.md'
+      - 'RELEASE_NOTES.md'
+      - '.gitignore'
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+# A breakage check from a CLEAN CHECKOUT, the same job camillia-mt's build.yml
+# does: a local `pio run` reuses .pio caches and can see untracked files, so it
+# cannot catch an uncommitted header. Releases are cut by release.yml, which
+# does its own clean build; this workflow must NOT publish release assets.
+#
+# Release commits carry [skip ci], so they do not run this workflow — look at
+# release.yml's run for a release's build log.
+
+jobs:
+  build:
+    name: Tests and PlatformIO build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Native unit tests
+        run: pio test -e native
+
+      - name: Build firmware
+        run: |
+          pio run -e heltec-v4
+          pio run -e heltec-v4-test
