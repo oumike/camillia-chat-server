@@ -191,7 +191,7 @@ Reached through the server's own WiFi access point, and optionally through a hom
 | | Gap between packets | 3 s |
 | | Max hops | 7 |
 | MQTT | Enabled, broker, port, username, password, topic root | Off |
-| WiFi | AP password; optional STA SSID/password (also used for NTP) | AP only |
+| WiFi | Optional STA SSID/password (also used for NTP). The config AP `camillia-cs-<short name>` is always open (no password) | AP only |
 | Status | Per-channel message counts, last message heard, MQTT state, queue length | — |
 
 With the defaults, clearing a full 250-message channel takes about 25 rounds of about 70 seconds each. In regions with a duty-cycle limit (for example EU 868 at 10%), the server must throttle its replies to stay within the limit, even if that is slower than the configured pacing.

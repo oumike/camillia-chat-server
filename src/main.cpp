@@ -40,7 +40,7 @@ static String ipText() {
 static void wifiBegin() {
     WiFi.mode(s_settings.staSsid[0] ? WIFI_AP_STA : WIFI_AP);
     String ssid = String("camillia-cs-") + s_settings.shortName;
-    WiFi.softAP(ssid.c_str(), s_settings.apPass[0] ? s_settings.apPass : nullptr);
+    WiFi.softAP(ssid.c_str());   // open: no password on the config AP
     if (s_settings.staSsid[0]) WiFi.begin(s_settings.staSsid, s_settings.staPass);
     Serial.printf("[cs] AP %s at %s\n", ssid.c_str(), WiFi.softAPIP().toString().c_str());
 }

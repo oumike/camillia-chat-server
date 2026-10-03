@@ -20,7 +20,6 @@ void settingsDefaults(Settings &s, uint32_t nodeId) {
     s.mqttEnabled = false;
     s.mqttPort = 1883;
     strcpy(s.mqttRoot, "msh/US");
-    strcpy(s.apPass, "camillia");
     strcpy(s.tz, "EST5EDT,M3.2.0,M11.1.0");
 }
 
@@ -47,8 +46,6 @@ bool settingsValidate(const Settings &s, char *err, size_t cap) {
     if (s.packetGapMs < 500 || s.packetGapMs > 60000)
         return fail(err, cap, "Packet gap must be 500-60000 ms");
     if (s.maxHops > 7) return fail(err, cap, "Max hops must be 0-7");
-    if (s.apPass[0] && strlen(s.apPass) < 8)
-        return fail(err, cap, "AP password must be empty or at least 8 characters");
     if (s.mqttEnabled && !s.mqttHost[0]) return fail(err, cap, "MQTT broker is required when MQTT is on");
     return true;
 }

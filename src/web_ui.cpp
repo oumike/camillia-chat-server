@@ -101,7 +101,6 @@ static String renderPage(const Settings &c, const char *error) {
     h += F("</fieldset>");
 
     h += F("<fieldset><legend>WiFi</legend>");
-    h += textInput("Access point password (empty = open)", "apPass", c.apPass, 63, "password");
     h += textInput("Home WiFi SSID (optional)", "staSsid", c.staSsid, 32);
     h += textInput("Home WiFi password", "staPass", c.staPass, 63, "password");
     h += textInput("Time zone (POSIX TZ, for the screen clock)", "tz", c.tz, 47);
@@ -148,7 +147,6 @@ static void handleSave() {
     copyArg("mqttUser", n.mqttUser, sizeof n.mqttUser);
     copyArg("mqttPass", n.mqttPass, sizeof n.mqttPass);
     copyArg("mqttRoot", n.mqttRoot, sizeof n.mqttRoot);
-    copyArg("apPass", n.apPass, sizeof n.apPass);
     copyArg("staSsid", n.staSsid, sizeof n.staSsid);
     copyArg("staPass", n.staPass, sizeof n.staPass);
     copyArg("tz", n.tz, sizeof n.tz);

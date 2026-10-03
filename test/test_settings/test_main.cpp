@@ -21,7 +21,6 @@ void test_defaults() {
     TEST_ASSERT_FALSE(s.mqttEnabled);
     TEST_ASSERT_EQUAL_STRING("msh/US", s.mqttRoot);
     TEST_ASSERT_EQUAL(1883, s.mqttPort);
-    TEST_ASSERT_EQUAL_STRING("camillia", s.apPass);
     TEST_ASSERT_EQUAL_STRING("EST5EDT,M3.2.0,M11.1.0", s.tz);
     char err[96];
     TEST_ASSERT_TRUE(settingsValidate(s, err, sizeof err));
@@ -41,8 +40,6 @@ void test_validate_rejects_out_of_range() {
     settingsDefaults(s, 1); s.chanCount = 0;    TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
     settingsDefaults(s, 1); s.chanCount = 4;    TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
     settingsDefaults(s, 1); s.shortName[0] = 0; TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
-    settingsDefaults(s, 1); strcpy(s.apPass, "short"); TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
-    settingsDefaults(s, 1); s.apPass[0] = 0;   TEST_ASSERT_TRUE(settingsValidate(s, err, sizeof err));  // open AP allowed
 }
 
 void test_validate_channels() {
