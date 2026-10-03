@@ -51,10 +51,42 @@ bool radioPoll(MeshPacket &pkt) {
     return false;
 }
 
-int slotForChanIdx(int chanIdx) {
-    if (chanIdx >= 0 && chanIdx < s_chanCount) return chanIdx;
-    if (chanIdx == DISCOVERY_SLOT) return -1;
+int slotForPacket(const MeshPacket &pkt) {
+    const int idx = pkt.chanIdx;
+    if (idx < 0 || idx >= MAX_CHANNELS || pkt.hdr.channel != CHANNEL_KEYS[idx].hash) return -2;
+    if (idx < s_chanCount) return idx;
+    if (idx == DISCOVERY_SLOT) return -1;
     return -2;
+}
+
+// Meshtastic's duty-cycle limited regions. EU_866 is set to the 1% ETSI default
+// for that band rather than guessed higher.
+uint8_t regionDutyPct(const char *region) {
+    static const struct { const char *code; uint8_t pct; } kDuty[] = {
+        {"EU_433", 10}, {"EU_868", 10}, {"EU_N_868", 10}, {"UA_433", 10}, {"UA_868", 1}, {"EU_866", 1},
+    };
+    for (const auto &d : kDuty)
+        if (!strcmp(d.code, region)) return d.pct;
+    return 100;
+}
+
+bool regionKnown(const char *region) {
+    for (uint8_t i = 0; i < kRegionCount; i++)
+        if (!strcmp(kRegions[i].code, region)) return true;
+    return false;
+}
+
+bool settingsValidateDevice(const Settings &s, char *err, size_t cap) {
+    if (!settingsValidate(s, err, cap)) return false;
+    if (!regionKnown(s.region)) {
+        snprintf(err, cap, "Unknown region \"%s\"", s.region);
+        return false;
+    }
+    if (s.modemPreset >= PRESET_COUNT || !presetUsableOnThisRadio(s.modemPreset)) {
+        snprintf(err, cap, "That preset is not available on this radio");
+        return false;
+    }
+    return true;
 }
 
 uint8_t hopsTravelled(const MeshHdr &hdr) {
@@ -89,7 +121,7 @@ bool radioSend(uint32_t to, int chanSlot, uint8_t hopLimit, uint32_t portnum,
     uint8_t data[256];
     size_t n = 0;
     auto varint = [&](uint32_t v) { do { uint8_t b = v & 0x7F; v >>= 7; data[n++] = b | (v ? 0x80 : 0); } while (v); };
-    if (len > 240) return false;
+    if (len > csp::MAX_PAYLOAD) return false;
     data[n++] = (1 << 3) | 0; varint(portnum);
     data[n++] = (2 << 3) | 2; varint((uint32_t)len);
     memcpy(data + n, payload, len); n += len;

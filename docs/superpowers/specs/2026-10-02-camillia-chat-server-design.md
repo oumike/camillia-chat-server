@@ -51,7 +51,7 @@ The server is on the same region, preset and frequency slot as the mesh it serve
 
 - Carried in ordinary Meshtastic packets, `Data.portnum = 256` (`PRIVATE_APP`). Stock Meshtastic nodes relay these and otherwise ignore them.
 - Every payload starts with two bytes: **protocol version** (`1`) and **message type**. Receivers drop unknown versions and types.
-- All integers are little-endian. A whole payload must fit in Meshtastic's 233-byte `Data.payload` limit.
+- All integers are little-endian. A whole payload must be **at most 231 bytes**: the SX1262's 255-byte frame, minus the 16-byte Meshtastic header, minus 8 bytes of `Data` framing for port 256 (portnum, payload tag and length, bitfield).
 
 ### 4.2 Channels and keys
 
@@ -93,7 +93,7 @@ A node's channel and a server's channel **match** when both name and key are ide
 | item count | 1 | |
 | items | | Each: sequence (4), sender (4), packet ID (4), age in seconds (4; `0xFFFFFFFF` = unknown), text length (1), text (≤200) |
 
-Several short messages are packed into one packet when they fit; a 200-byte message goes alone.
+Several short messages are packed into one packet when they fit (12-byte header + 17 bytes per item + text ≤ 231); a 200-byte message goes alone (229 bytes).
 
 ### 4.4 Where "since" comes from — no clocks involved
 

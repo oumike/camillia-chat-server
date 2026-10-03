@@ -2,6 +2,7 @@
 #include <WebServer.h>
 #include "mesh_channel_plan.h"
 #include "settings_yaml.h"
+#include "radio_link.h"
 
 static WebServer               s_server(80);
 static Settings               *s_cfg = nullptr;
@@ -240,7 +241,7 @@ static void handleSave() {
     copyArg("staPass", n.staPass, sizeof n.staPass);
     copyArg("tz", n.tz, sizeof n.tz);
 
-    if (!err[0]) settingsValidate(n, err, sizeof err);
+    if (!err[0]) settingsValidateDevice(n, err, sizeof err);
     if (err[0]) {
         s_server.send(400, "text/html", renderPage(n, err));
         return;
@@ -257,7 +258,8 @@ static void handleExport() {
 static void handleImport() {
     Settings n = *s_cfg;
     char err[96] = "";
-    if (!settingsFromYaml(s_server.arg("yaml").c_str(), n, kPresetMap, err, sizeof err)) {
+    if (!settingsFromYaml(s_server.arg("yaml").c_str(), n, kPresetMap, err, sizeof err) ||
+        !settingsValidateDevice(n, err, sizeof err)) {
         String msg = String("Import failed: ") + err;
         s_server.send(400, "text/html", renderPage(*s_cfg, msg.c_str()));
         return;

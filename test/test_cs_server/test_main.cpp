@@ -103,7 +103,7 @@ void test_pack_respects_payload_limit() {
 }
 
 void test_pack_short_messages_share_a_packet() {
-    ChannelStore *s = storeWith(10, 5);
+    ChannelStore *s = storeWith(10, 4);   // 12 + 10 x (17 + 4) = 222 bytes
     StoredMsg msgs[10];
     s->copyAfter(0, msgs, 10);
     uint8_t packets[16][MAX_PAYLOAD];
@@ -139,7 +139,23 @@ void test_pack_empty_sends_one_last_packet() {
     TEST_ASSERT_EQUAL_UINT32(9, h.epoch);
 }
 
+void test_pack_never_exceeds_radio_limit() {
+    // Two items totalling 187 bytes of text: 12 + 2*17 + 187 = 233 would fit the
+    // old 233 limit but not the radio (255 - 16 header - 8 Data framing = 231).
+    StoredMsg m[2] = {};
+    m[0].seq = 1; m[0].textLen = 100; memset(m[0].text, 'a', 100);
+    m[1].seq = 2; m[1].textLen = 87;  memset(m[1].text, 'b', 87);
+    uint8_t packets[4][MAX_PAYLOAD];
+    size_t lens[4];
+    int np = packItems(m, 2, 0, false, 0, 1, false, packets, lens, 4);
+    TEST_ASSERT_EQUAL(2, np);
+    for (int i = 0; i < np; i++) TEST_ASSERT_LESS_OR_EQUAL(231, lens[i]);
+}
+
 // ── Task 5: CsServer queue, hops, pacing ─────────────────────────
+
+static constexpr uint32_t ME = 0x5E5E5E5E;
+static uint32_t s_pktId = 1;
 
 struct Rig {
     ChannelStore *stores;
@@ -155,14 +171,21 @@ struct Rig {
         ServerConfig cfg;
         cfg.maxHops = maxHops; cfg.batchSize = batch; cfg.packetGapMs = gap;
         strcpy(cfg.shortName, "CSRV");
+        cfg.myNodeId = ME;
         server.begin(cfg, stores, ids, names, 2);
     }
     ~Rig() { delete[] stores; }
-    void request(uint32_t from, int slot, uint8_t hops, uint32_t cursor, uint32_t nowMs = 0) {
+    void request(uint32_t from, int slot, uint8_t hops, uint32_t cursor, uint32_t nowMs = 0,
+                 uint32_t to = ME, uint32_t pktId = 0) {
         Request r{stores[slot].epoch(), cursor, 0, 0};
         uint8_t buf[MAX_PAYLOAD];
         size_t n = encodeRequest(r, buf, sizeof buf);
-        server.onPacket(from, slot, hops, buf, n, nowMs);
+        server.onPacket(from, to, pktId ? pktId : s_pktId++, slot, hops, buf, n, nowMs);
+    }
+    void discover(uint32_t from, uint8_t hops, uint32_t to = 0xFFFFFFFF, uint32_t pktId = 0) {
+        uint8_t buf[4];
+        size_t n = encodeDiscover(buf, sizeof buf);
+        server.onPacket(from, to, pktId ? pktId : s_pktId++, -1, hops, buf, n, 0);
     }
     bool poll(uint32_t nowMs, Outgoing &o) { return server.poll(nowMs, 0, false, nowMs / 1000, o); }
 };
@@ -173,9 +196,7 @@ static void decodeOut(const Outgoing &o, BatchHeader &h, Item *items, uint8_t &n
 
 void test_discover_yields_announce() {
     Rig rig(0, 5);
-    uint8_t buf[4];
-    size_t n = encodeDiscover(buf, sizeof buf);
-    rig.server.onPacket(0xC0FFEE, -1, 2, buf, n, 0);
+    rig.discover(0xC0FFEE, 2);
     Outgoing o;
     TEST_ASSERT_TRUE(rig.poll(0, o));
     TEST_ASSERT_EQUAL_HEX32(0xC0FFEE, o.to);
@@ -194,8 +215,7 @@ void test_ignores_beyond_max_hops() {
     Rig rig(5, 5, /*maxHops=*/3);
     rig.request(0xA, 0, 4, 0);
     TEST_ASSERT_EQUAL(0, rig.server.queueLength());
-    uint8_t buf[4];
-    rig.server.onPacket(0xB, -1, 4, buf, encodeDiscover(buf, sizeof buf), 0);
+    rig.discover(0xB, 4);
     Outgoing o;
     TEST_ASSERT_FALSE(rig.poll(0, o));
 }
@@ -205,8 +225,8 @@ void test_ignores_request_on_discovery_or_unused_slot() {
     Request r{0, 0, 0, 0};
     uint8_t buf[MAX_PAYLOAD];
     size_t n = encodeRequest(r, buf, sizeof buf);
-    rig.server.onPacket(0xA, -1, 0, buf, n, 0);
-    rig.server.onPacket(0xA, 2, 0, buf, n, 0);   // slot 2 exists but chanCount is 2
+    rig.server.onPacket(0xA, ME, 901, -1, 0, buf, n, 0);
+    rig.server.onPacket(0xA, ME, 902, 2, 0, buf, n, 0);   // slot 2 exists but chanCount is 2
     TEST_ASSERT_EQUAL(0, rig.server.queueLength());
 }
 
@@ -250,7 +270,7 @@ void test_queue_capacity_24() {
 }
 
 void test_queue_replaces_duplicate_requester() {
-    Rig rig(20, 5);
+    Rig rig(20, 4);   // a 10-message batch fits one packet
     rig.request(0xB, 0, 0, 0);    // occupies the server first
     Outgoing o;
     TEST_ASSERT_TRUE(rig.poll(0, o));
@@ -287,8 +307,7 @@ void test_last_sent_at_tracks_batch_packets() {
     Rig rig(3, 5);
     uint32_t unix = 1, up = 1;
     TEST_ASSERT_FALSE(rig.server.lastSentAt(unix, up));
-    uint8_t buf[4];
-    rig.server.onPacket(0xB, -1, 0, buf, encodeDiscover(buf, sizeof buf), 0);
+    rig.discover(0xB, 0);
     Outgoing o;
     TEST_ASSERT_TRUE(rig.server.poll(0, 1700000000, true, 50, o));   // announce only
     TEST_ASSERT_FALSE(rig.server.lastSentAt(unix, up));
@@ -314,6 +333,49 @@ void test_clear_slot_drops_pending_and_active() {
     TEST_ASSERT_EQUAL(1, o.chanSlot);
 }
 
+void test_ignores_request_addressed_to_other_node() {
+    Rig rig(5, 5);
+    rig.request(0xA, 0, 0, 0, 0, /*to=*/0x99999999);
+    TEST_ASSERT_EQUAL(0, rig.server.queueLength());
+}
+
+void test_discover_broadcast_or_to_me_only() {
+    Rig rig(0, 5);
+    rig.discover(0xA, 0, /*to=*/0x99999999);
+    Outgoing o;
+    TEST_ASSERT_FALSE(rig.poll(0, o));
+    rig.discover(0xA, 0, /*to=*/ME);
+    TEST_ASSERT_TRUE(rig.poll(0, o));
+}
+
+void test_relayed_duplicate_request_ignored_after_dequeue() {
+    Rig rig(3, 5);
+    rig.request(0xA, 0, 0, 0, 0, ME, 777);
+    Outgoing o;
+    TEST_ASSERT_TRUE(rig.poll(0, o));              // served, LAST
+    rig.request(0xA, 0, 1, 0, 1000, ME, 777);      // relay's copy of the same packet
+    TEST_ASSERT_EQUAL(0, rig.server.queueLength());
+    TEST_ASSERT_FALSE(rig.poll(5000, o));
+}
+
+void test_relayed_duplicate_discover_ignored() {
+    Rig rig(0, 5);
+    rig.discover(0xA, 0, 0xFFFFFFFF, 55);
+    Outgoing o;
+    TEST_ASSERT_TRUE(rig.poll(0, o));
+    rig.discover(0xA, 1, 0xFFFFFFFF, 55);
+    TEST_ASSERT_FALSE(rig.poll(5000, o));
+}
+
+void test_request_matching_active_transfer_ignored() {
+    Rig rig(25, 150);
+    rig.request(0xA, 0, 0, 0);
+    Outgoing o;
+    TEST_ASSERT_TRUE(rig.poll(0, o));              // transfer to A on slot 0 under way
+    rig.request(0xA, 0, 0, 0);                     // new packet id, same node + slot
+    TEST_ASSERT_EQUAL(0, rig.server.queueLength());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_since_uses_cursor_when_epoch_matches);
@@ -326,6 +388,7 @@ int main() {
     RUN_TEST(test_pack_short_messages_share_a_packet);
     RUN_TEST(test_pack_age_unknown_after_reboot);
     RUN_TEST(test_pack_empty_sends_one_last_packet);
+    RUN_TEST(test_pack_never_exceeds_radio_limit);
     RUN_TEST(test_discover_yields_announce);
     RUN_TEST(test_ignores_beyond_max_hops);
     RUN_TEST(test_ignores_request_on_discovery_or_unused_slot);
@@ -336,5 +399,10 @@ int main() {
     RUN_TEST(test_serves_fifo_one_at_a_time);
     RUN_TEST(test_last_sent_at_tracks_batch_packets);
     RUN_TEST(test_clear_slot_drops_pending_and_active);
+    RUN_TEST(test_ignores_request_addressed_to_other_node);
+    RUN_TEST(test_discover_broadcast_or_to_me_only);
+    RUN_TEST(test_relayed_duplicate_request_ignored_after_dequeue);
+    RUN_TEST(test_relayed_duplicate_discover_ignored);
+    RUN_TEST(test_request_matching_active_transfer_ignored);
     return UNITY_END();
 }

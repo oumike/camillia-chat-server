@@ -133,13 +133,15 @@ bool ChannelStore::deserialize(const uint8_t *in, size_t len) {
     int count = in[12] | in[13] << 8;
     if (count > CS_MSGS_PER_CHANNEL || (uint32_t)count > lastSeq) return false;
 
-    // Validate everything before touching the ring.
+    // Validate everything before touching the ring: seqs strictly increase, end <= lastSeq.
     size_t off = kHeader;
-    uint32_t expectSeq = lastSeq - (uint32_t)count + 1;
-    for (int i = 0; i < count; i++, expectSeq++) {
+    uint32_t prevSeq = 0;
+    for (int i = 0; i < count; i++) {
         if (off + kRecordFixed > len - 4) return false;
+        uint32_t seq = get32(in + off);
         uint8_t tl = in[off + 17];
-        if (get32(in + off) != expectSeq || tl > CS_MAX_TEXT) return false;
+        if (seq <= prevSeq || seq > lastSeq || tl > CS_MAX_TEXT) return false;
+        prevSeq = seq;
         off += kRecordFixed + tl;
     }
     if (off != len - 4) return false;
@@ -158,7 +160,7 @@ bool ChannelStore::deserialize(const uint8_t *in, size_t len) {
     }
     _start = 0;
     _count = count;
-    _lastSeq = lastSeq;
+    _lastSeq = lastSeq + CS_SEQ_RESERVE;
     _epoch = epoch;
     _dirty = false;
     _addsSinceSave = 0;

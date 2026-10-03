@@ -151,6 +151,7 @@ static void serverBegin() {
     cfg.maxHops = s_settings.maxHops;
     cfg.batchSize = s_settings.batchSize;
     cfg.packetGapMs = s_settings.packetGapMs;
+    cfg.myNodeId = s_nodeId;
     strncpy(cfg.shortName, s_settings.shortName, sizeof(cfg.shortName) - 1);
     static uint32_t ids[CS_MAX_CHANNELS];
     static char names[CS_MAX_CHANNELS][12];
@@ -159,7 +160,7 @@ static void serverBegin() {
         strncpy(names[i], s_settings.ch[i].name, sizeof(names[i]) - 1);
     }
     s_server.begin(cfg, s_stores, ids, names, s_settings.chanCount);
-    s_dutyLimitPct = (!strcmp(s_settings.region, "EU_868") || !strcmp(s_settings.region, "EU_433")) ? 10 : 100;
+    s_dutyLimitPct = regionDutyPct(s_settings.region);
     Serial.printf("[cs] server: batch %u, gap %u ms, max hops %u, duty limit %u%%\n",
                   cfg.batchSize, cfg.packetGapMs, cfg.maxHops, s_dutyLimitPct);
 }
@@ -194,13 +195,14 @@ static void serveLoop(uint32_t nowMs) {
 }
 
 static void handleChatServerPacket(const MeshPacket &pkt, uint32_t nowMs) {
-    int slot = slotForChanIdx(pkt.chanIdx);
+    int slot = slotForPacket(pkt);
     if (slot == -2 || pkt.hdr.from == s_nodeId) return;
     csp::Type t;
     if (!csp::peekType(pkt.payload, pkt.payloadLen, t)) return;
     Serial.printf("[cs] rx %s from !%08x ch%d hops %u\n", t == csp::DISCOVER ? "DISCOVER" : t == csp::REQUEST ? "REQUEST" : "other",
                   (unsigned)pkt.hdr.from, slot, hopsTravelled(pkt.hdr));
-    s_server.onPacket(pkt.hdr.from, slot, hopsTravelled(pkt.hdr), pkt.payload, pkt.payloadLen, nowMs);
+    s_server.onPacket(pkt.hdr.from, pkt.hdr.to, pkt.hdr.id, slot, hopsTravelled(pkt.hdr), pkt.payload,
+                      pkt.payloadLen, nowMs);
 }
 
 // USB serial console: "yaml-export" prints the config; "yaml-import" reads YAML
@@ -218,7 +220,8 @@ static void serialLoop(uint32_t nowMs) {
                 importing = false;
                 Settings n = s_settings;
                 char err[96] = "";
-                if (settingsFromYaml(yaml.c_str(), n, kYamlPresets, err, sizeof err)) {
+                if (settingsFromYaml(yaml.c_str(), n, kYamlPresets, err, sizeof err) &&
+                    settingsValidateDevice(n, err, sizeof err)) {
                     s_settings = n;
                     settingsSave(n);
                     Serial.println("[cs] yaml-import: saved, restarting");
@@ -256,7 +259,8 @@ static void serialLoop(uint32_t nowMs) {
             }
             if (n) {
                 Serial.printf("[cs] test: %s\n", line.c_str());
-                s_server.onPacket(0x12345678, slot, 0, buf, n, nowMs);
+                static uint32_t testPktId = 1;
+                s_server.onPacket(0x12345678, slot < 0 ? 0xFFFFFFFF : s_nodeId, testPktId++, slot, 0, buf, n, nowMs);
             } else {
                 Serial.printf("[cs] unknown command \"%s\"\n", line.c_str());
             }
@@ -267,7 +271,7 @@ static void serialLoop(uint32_t nowMs) {
 }
 
 static void ingest(const MeshPacket &pkt, MsgSource source) {
-    int slot = slotForChanIdx(pkt.chanIdx);
+    int slot = slotForPacket(pkt);
     if (pkt.portnum != TEXT_MESSAGE_APP || pkt.hdr.to != 0xFFFFFFFF || slot < 0) return;
     time_t now = time(nullptr);
     bool added = s_stores[slot].add(pkt.hdr.from, pkt.hdr.id, (const char *)pkt.payload,
@@ -337,5 +341,10 @@ void loop() {
     for (int i = 0; i < s_settings.chanCount; i++) st.storedMessages += s_stores[i].count();
     displayUpdate(st);
 
-    if (s_restartAtMs && (int32_t)(nowMs - s_restartAtMs) >= 0) ESP.restart();
+    if (s_restartAtMs && (int32_t)(nowMs - s_restartAtMs) >= 0) {
+        // Don't lose messages heard since the last scheduled save.
+        for (int i = 0; i < s_settings.chanCount; i++)
+            if (s_stores[i].dirty()) persistSaveNow(s_stores[i], i);
+        ESP.restart();
+    }
 }

@@ -26,12 +26,15 @@ int packItems(const StoredMsg *msgs, int n, uint32_t nowUnix, bool timeValid,
 constexpr int CS_QUEUE_CAP      = 24;
 constexpr int CS_ANNOUNCE_CAP   = 8;
 constexpr int CS_MAX_BATCH      = 50;
+constexpr int CS_RECENT_CAP     = 32;        // remembered (from, packetId) of port-256 packets
+constexpr uint32_t CS_RECENT_MS = 600000;    // ...for 10 minutes
 
 struct ServerConfig {
     uint8_t  maxHops = 7;
     uint8_t  batchSize = 10;
     uint16_t packetGapMs = 3000;
     char     shortName[5] = "";
+    uint32_t myNodeId = 0;   // REQUESTs must be addressed to us
 };
 
 struct Outgoing {
@@ -48,7 +51,9 @@ public:
                const char (*chanNames)[12], int chanCount);
 
     // chanSlot: store slot the packet decrypted on, or -1 for the discovery channel.
-    void onPacket(uint32_t from, int chanSlot, uint8_t hopsTravelled,
+    // REQUESTs must be addressed to us; DISCOVERs to us or broadcast. A packet
+    // already seen (same from + packetId, e.g. a relay's copy) is ignored.
+    void onPacket(uint32_t from, uint32_t to, uint32_t packetId, int chanSlot, uint8_t hopsTravelled,
                   const uint8_t *payload, size_t len, uint32_t nowMs);
 
     // At most one packet per call, and only once the packet gap has elapsed.
@@ -73,6 +78,12 @@ private:
     struct AnnounceTo { uint32_t to; uint8_t hops; };
 
     void startNext(uint32_t nowUnix, bool timeValid, uint32_t nowUptimeSec);
+    bool seenRecently(uint32_t from, uint32_t packetId, uint32_t nowMs);
+
+    struct Recent { uint32_t from, packetId, atMs; };
+    Recent _recent[CS_RECENT_CAP];
+    int    _recentNext = 0;
+    int    _recentLen = 0;
 
     ServerConfig  _cfg;
     ChannelStore *_stores = nullptr;

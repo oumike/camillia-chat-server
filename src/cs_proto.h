@@ -13,7 +13,9 @@ constexpr uint8_t  FLAG_LAST       = 1;
 constexpr uint8_t  FLAG_MORE       = 2;
 constexpr uint8_t  FLAG_TIME_VALID = 4;
 constexpr uint32_t AGE_UNKNOWN     = 0xFFFFFFFF;
-constexpr size_t   MAX_PAYLOAD     = 233;
+// SX1262 max frame 255 - 16-byte Meshtastic header - 8 bytes of Data framing
+// for port 256 (portnum, payload tag+len, bitfield) = 231. Not Meshtastic's 233.
+constexpr size_t   MAX_PAYLOAD     = 231;
 constexpr size_t   MAX_TEXT        = 200;
 constexpr int      MAX_ANNOUNCE_CHANNELS    = 10;   // 10 x (4+1+11) + 9 = 169 bytes max
 constexpr size_t   ITEM_OVERHEAD   = 17;   // seq, from, packetId, age, textLen

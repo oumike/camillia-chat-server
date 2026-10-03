@@ -6,6 +6,10 @@
 constexpr int CS_MAX_CHANNELS     = 10;
 constexpr int CS_MSGS_PER_CHANNEL = 250;
 constexpr int CS_MAX_TEXT         = 200;
+// Sequence numbers skipped on every load: more than can be unsaved at a power
+// cut (a save happens by the 20th new message), so a number handed out before
+// the cut is never reused for a different message under the same epoch.
+constexpr uint32_t CS_SEQ_RESERVE = 32;
 
 enum MsgSource : uint8_t { SRC_LORA = 0, SRC_MQTT = 1 };
 
@@ -34,8 +38,9 @@ public:
              uint32_t rxUnix, uint32_t rxUptimeSec, uint8_t source);
 
     uint32_t epoch() const   { return _epoch; }
-    uint32_t headSeq() const { return _lastSeq; }
-    uint32_t tailSeq() const { return _count ? _lastSeq - (uint32_t)_count + 1 : _lastSeq + 1; }
+    // Newest / oldest held seq. Seqs increase but may have gaps (see CS_SEQ_RESERVE).
+    uint32_t headSeq() const { return _count ? at(_count - 1).seq : _lastSeq; }
+    uint32_t tailSeq() const { return _count ? at(0).seq : _lastSeq + 1; }
     int      count() const   { return _count; }
 
     // Seq of the held message (from, packetId), or 0 if not held.

@@ -80,14 +80,29 @@ void CsServer::begin(const ServerConfig &cfg, ChannelStore *stores, const uint32
         strncpy(_announce.ch[i].name, chanNames[i], sizeof(_announce.ch[i].name) - 1);
     }
     _qLen = _annLen = _txCount = _txIdx = 0;
+    _recentLen = _recentNext = 0;
     _sentAny = false;
 }
 
-void CsServer::onPacket(uint32_t from, int chanSlot, uint8_t hopsTravelled,
-                        const uint8_t *payload, size_t len, uint32_t) {
+bool CsServer::seenRecently(uint32_t from, uint32_t packetId, uint32_t nowMs) {
+    for (int i = 0; i < _recentLen; i++) {
+        const Recent &r = _recent[i];
+        if (r.from == from && r.packetId == packetId && nowMs - r.atMs < CS_RECENT_MS) return true;
+    }
+    _recent[_recentNext] = {from, packetId, nowMs};
+    _recentNext = (_recentNext + 1) % CS_RECENT_CAP;
+    if (_recentLen < CS_RECENT_CAP) _recentLen++;
+    return false;
+}
+
+void CsServer::onPacket(uint32_t from, uint32_t to, uint32_t packetId, int chanSlot,
+                        uint8_t hopsTravelled, const uint8_t *payload, size_t len, uint32_t nowMs) {
     if (hopsTravelled > _cfg.maxHops) return;
     Type t;
     if (!peekType(payload, len, t)) return;
+    if (t == REQUEST && to != _cfg.myNodeId) return;
+    if (t == DISCOVER && to != 0xFFFFFFFF && to != _cfg.myNodeId) return;
+    if ((t == REQUEST || t == DISCOVER) && seenRecently(from, packetId, nowMs)) return;
 
     if (t == DISCOVER) {
         for (int i = 0; i < _annLen; i++) if (_ann[i].to == from) return;
@@ -98,6 +113,7 @@ void CsServer::onPacket(uint32_t from, int chanSlot, uint8_t hopsTravelled,
 
     Request req;
     if (!decodeRequest(payload, len, req)) return;
+    if (busy() && _txTo == from && _txSlot == chanSlot) return;   // already being served
     Pending p{from, chanSlot, hopsTravelled, req};
     for (int i = 0; i < _qLen; i++) {
         if (_q[i].from == from && _q[i].slot == chanSlot) { _q[i] = p; return; }

@@ -16,5 +16,13 @@ bool radioSend(uint32_t to, int chanSlot, uint8_t hopLimit, uint32_t portnum,
 // Send an already-encoded Meshtastic Data message.
 bool radioSendData(uint32_t to, int chanSlot, uint8_t hopLimit, const uint8_t *data, size_t len);
 uint8_t hopsTravelled(const MeshHdr &hdr);
-// Store slot for a CHANNEL_KEYS index: 0..chanCount-1, -1 for discovery, -2 if neither.
-int slotForChanIdx(int chanIdx);
+// Store slot a decrypted packet belongs to: 0..chanCount-1, -1 for discovery, -2 if
+// neither. The header's channel hash must match the key's channel too: the mesh
+// layer also tries every key, which would file another channel sharing a key here.
+int slotForPacket(const MeshPacket &pkt);
+
+// Transmit duty-cycle limit for a region, in percent (100 = none).
+uint8_t regionDutyPct(const char *region);
+bool regionKnown(const char *region);
+// settingsValidate plus the checks that need the radio tables (region, preset).
+bool settingsValidateDevice(const Settings &s, char *err, size_t errCap);

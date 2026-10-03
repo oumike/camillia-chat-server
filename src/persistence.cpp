@@ -9,6 +9,7 @@ static uint32_t s_lastSaveMs[CS_MAX_CHANNELS] = {0};
 static bool     s_ok = false;
 
 static String path(int i, const char *ext) { return String("/cs/ch") + i + ext; }
+static void save(ChannelStore &st, int i);
 
 bool persistBegin() {
     s_ok = LittleFS.begin(true, "/littlefs", 10, "littlefs");
@@ -49,6 +50,9 @@ void persistLoadAll(ChannelStore *stores, const Settings &s) {
         Serial.printf("[cs] channel %d \"%s\": %s, %d messages, epoch %08x\n", i, s.ch[i].name,
                       loaded ? "loaded" : "new", stores[i].count(), (unsigned)stores[i].epoch());
         if (!loaded && s_ok) {
+            // Replace the old channel's file with the empty store BEFORE recording
+            // the new channel ID, so a restart can never pair them.
+            save(stores[i], i);
             File m = LittleFS.open(path(i, ".meta"), "w");
             if (m) m.write((const uint8_t *)&id, 4);
         }
