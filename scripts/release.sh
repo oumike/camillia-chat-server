@@ -17,7 +17,7 @@
 
 set -e
 
-RELEASE_ENVS=(heltec-v4)
+RELEASE_ENVS=(heltec-v4 heltec-v4-expansion)
 TEST_ENV="native"
 
 env_out_name()          { echo "$1"; }
