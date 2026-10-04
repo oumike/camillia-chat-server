@@ -7,7 +7,7 @@
 #include "airtime.h"
 #include "battery.h"
 #include "battery_level.h"
-#include "board.h"
+#include "board_init.h"
 #include "channel_store.h"
 #include "cs_server.h"
 #include "messages_json.h"
@@ -365,18 +365,10 @@ static void ingest(const MeshPacket &pkt, MsgSource source) {
 }
 
 void setup() {
-#if defined(CS_BOARD_V4_EXPANSION)
-    // VEXT (GPIO36) LOW first, and never again: HIGH breaks touch I2C, and
-    // raising it late stops this board booting. See board_v4_exp.h.
-    pinMode(VEXT_PIN, OUTPUT);
-    digitalWrite(VEXT_PIN, VEXT_ON_LEVEL);
-    // GPIO7 (BOARD_POWERON in camillia-mt main_lvgl.cpp setup()) HIGH before lcd.init(),
-    // not only later in radioBegin().
-    pinMode(LORA_FEM_POWER_PIN, OUTPUT);
-    digitalWrite(LORA_FEM_POWER_PIN, HIGH);
-#endif
+    boardEarlyInit();
     Serial.begin(115200);
     delay(1500);
+    boardReport();
     s_nodeId = nodeIdFromMac();
     if (!settingsLoad(s_settings)) {
         settingsDefaults(s_settings, s_nodeId);

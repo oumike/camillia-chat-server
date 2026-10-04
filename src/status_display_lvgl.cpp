@@ -1,19 +1,19 @@
-// Status display for the Heltec V4 expansion kit: ST7789 320x240 through
-// LovyanGFX, LVGL 9.5, CHSC6X touch (spec §6). The plain V4 builds
-// status_display_oled.cpp instead (platformio.ini build_src_filter).
+// Status display for the 320x240 TFT builds: LVGL 9.5 (spec §6). Panel,
+// backlight, touch and the Wake button are behind display_hal.h, one file per
+// board. The plain V4 builds status_display_oled.cpp instead (platformio.ini
+// build_src_filter).
 #include "status_display.h"
 #include <Arduino.h>
-#include <Wire.h>
 #include <esp_heap_caps.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include "hal_v4_exp_display.h"
 #include <lvgl.h>
 #include "battery_level.h"
 #include "board.h"
 #include "cs_server.h"
+#include "display_hal.h"
 #include "display_text.h"
 #include "mesh_channel_plan.h"
 #include "page_cycler.h"
@@ -24,18 +24,13 @@ constexpr int32_t  kW = TFT_LANDSCAPE_W, kH = TFT_LANDSCAPE_H;
 constexpr int32_t  kBarH = 20;
 constexpr int32_t  kBufLines = 40;
 constexpr uint32_t kSplashMs = 3000;
-constexpr uint32_t kTouchSlowMs = 200;   // a healthy CHSC6X read takes ~1 ms; a bus timeout ~1 s
 constexpr int      kFeedRows = 7, kActRows = 11, kChanRows = 5;
 
 // camillia-mt's "Camillia Dark" theme preset (kUiThemePresets[0]) and splash text colours.
 constexpr uint16_t kBgMain = 0x0843, kPanelBg = 0x1065, kPanelAlt = 0x18A7, kAccent = 0xDA8E;
 constexpr uint32_t kTextMain = 0xF3F6FA, kTextDim = 0xB7C0CC;
 
-LGFX_V4Exp    s_lcd;
 bool          s_off = false;
-bool          s_touchOff = false;
-bool          s_panelUp = false;   // lcd.init() succeeded; fail() may then blank the backlight
-uint8_t       s_touchFails = 0;
 lv_display_t *s_disp = nullptr;
 uint8_t      *s_buf1 = nullptr, *s_buf2 = nullptr;
 
@@ -84,7 +79,7 @@ lv_color_t c565(uint16_t c) {
 
 void fail(const char *reason) {
     Serial.printf("[cs] display: %s\n", reason);
-    if (s_panelUp) s_lcd.setBrightness(0);   // don't leave a lit black panel
+    dhalOff();   // don't leave a lit black panel
     s_off = true;
 }
 
@@ -94,28 +89,16 @@ uint32_t tickMs() { return millis(); }
 void flushCb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
     const int32_t w = area->x2 - area->x1 + 1;
     const int32_t h = area->y2 - area->y1 + 1;
-    s_lcd.pushImage(area->x1, area->y1, w, h, (lgfx::rgb565_t *)px_map);
+    dhalFlush(area->x1, area->y1, w, h, (const uint16_t *)px_map);
     lv_display_flush_ready(disp);
 }
 
-// The CHSC6X library reports "no touch" and "bus error" the same way, so a
-// failed read is one that took a bus timeout. Three in a row: stop polling.
+// Touch-failure handling lives in the back end: dhalTouch() is false once touch is off.
 void touchReadCb(lv_indev_t *indev, lv_indev_data_t *data) {
     LV_UNUSED(indev);
     data->state = LV_INDEV_STATE_RELEASED;
-    if (s_touchOff) return;
-    int32_t tx = 0, ty = 0;
-    const uint32_t t0 = millis();
-    const bool touched = s_lcd.getTouch(&tx, &ty);
-    if (millis() - t0 >= kTouchSlowMs) {
-        if (++s_touchFails >= 3) {
-            s_touchOff = true;
-            Serial.printf("[cs] display: touch read failed 3 times; touch off\n");
-        }
-        return;
-    }
-    s_touchFails = 0;
-    if (touched) {
+    int16_t tx = 0, ty = 0;
+    if (dhalTouch(tx, ty)) {
         data->state = LV_INDEV_STATE_PRESSED;
         data->point.x = tx;
         data->point.y = ty;
@@ -442,25 +425,8 @@ void fillActivity(const DisplayStatus &st) {
 }  // namespace
 
 void displayBegin() {
-    // GPIO36 (VEXT) is already LOW from the top of setup(); not touched here.
-    if (!s_lcd.init()) return fail("panel init failed");
-    s_panelUp = true;
-    s_lcd.setRotation(TFT_ROTATION_LANDSCAPE);
-    s_lcd.setBrightness(TFT_BRIGHTNESS_DEFAULT);
-    s_lcd.fillScreen(TFT_BLACK);
-
-    // lcd.init() started the CHSC6X on Wire1; if it does not ACK, never poll it.
-    // chsc6x_init only waits 30 ms after reset, so retry the probe before giving up.
-    bool touchAck = false;
-    for (int attempt = 0; attempt < 3 && !touchAck; attempt++) {
-        delay(100);
-        Wire1.beginTransmission((uint8_t)TOUCH_ADDR);
-        touchAck = (Wire1.endTransmission() == 0);
-    }
-    if (!touchAck) {
-        s_touchOff = true;
-        Serial.printf("[cs] display: touch controller not answering; touch off\n");
-    }
+    char err[64] = "";
+    if (!dhalBegin(err, sizeof err)) return fail(err);
 
     const size_t bufBytes = (size_t)kW * kBufLines * 2;   // RGB565
     s_buf1 = (uint8_t *)heap_caps_malloc(bufBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -487,8 +453,7 @@ void displayBegin() {
         lv_indev_set_type(touch, LV_INDEV_TYPE_POINTER);
         lv_indev_set_read_cb(touch, touchReadCb);
         lv_indev_set_display(touch, s_disp);
-    } else if (!s_touchOff) {
-        s_touchOff = true;
+    } else {
         Serial.printf("[cs] display: no LVGL input device; touch off\n");
     }
 
@@ -519,9 +484,10 @@ void displayUpdate(const DisplayStatus &st) {
     // tick() before lv_timer_handler(): tap() (from CLICKED, delivered inside
     // the handler) decides wake-vs-advance from the dim state tick() refreshes.
     s_cycler.tick(now, st.battState == BATT_EXTERNAL || st.battState == BATT_ABSENT);
+    if (dhalWakePressed()) s_cycler.tap(now);   // a Wake button press counts as a tap
     const uint8_t level = s_cycler.backlight();
     if (level != s_blLevel) {
-        s_lcd.setBrightness(level);
+        dhalBacklight(level);
         s_blLevel = level;
     }
 
