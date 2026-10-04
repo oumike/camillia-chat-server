@@ -1,6 +1,6 @@
 #!/bin/bash
 # Release the camillia chat server — modelled on camillia-mt's scripts/release.sh,
-# for this repo's single board and without OTA.
+# for this repo's boards and without OTA.
 #
 # By default this script builds nothing: it works out the version, writes and
 # reviews RELEASE_NOTES.md, commits, pushes and dispatches
@@ -10,6 +10,7 @@
 # What a release publishes:
 #   camillia-chat-server-heltec-v4-vX.Y.Z.bin   merged factory image, written at 0x0
 #   camillia-chat-server-heltec-v4-expansion-vX.Y.Z.bin   same, for the V4 + expansion display board
+#   camillia-chat-server-wio-tracker-l2-vX.Y.Z.bin        same, for the Seeed Wio Tracker L2
 #   flash.sh                                     helper that writes it with esptool
 #
 # There is no OTA image and no signing key: the chat server is updated over USB.
@@ -18,7 +19,7 @@
 
 set -e
 
-RELEASE_ENVS=(heltec-v4 heltec-v4-expansion)
+RELEASE_ENVS=(heltec-v4 heltec-v4-expansion wio-tracker-l2)
 TEST_ENV="native"
 
 env_out_name()          { echo "$1"; }
