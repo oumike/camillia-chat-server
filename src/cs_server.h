@@ -72,9 +72,9 @@ public:
     bool busy() const        { return _txIdx < _txCount; }
 
     // Time of the last BATCH packet sent to a node (announces don't count).
-    bool lastSentAt(uint32_t &unix, uint32_t &uptimeSec) const {
+    bool lastSentAt(uint32_t &unixTime, uint32_t &uptimeSec) const {
         if (!_everSentBatch) return false;
-        unix = _lastSentUnix; uptimeSec = _lastSentUptime;
+        unixTime = _lastSentUnix; uptimeSec = _lastSentUptime;
         return true;
     }
 

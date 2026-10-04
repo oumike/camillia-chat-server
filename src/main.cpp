@@ -80,9 +80,9 @@ static int presetIndex(const char *name) {
 static const YamlPresetMap kYamlPresets{presetName, presetIndex};
 
 static String lastSentJson() {
-    uint32_t unix, up;
-    if (!s_server.lastSentAt(unix, up)) return "null";
-    return unix ? String(unix) : "\"" + String(millis() / 1000 - up) + "s ago\"";
+    uint32_t unixTime, up;
+    if (!s_server.lastSentAt(unixTime, up)) return "null";
+    return unixTime ? String(unixTime) : "\"" + String(millis() / 1000 - up) + "s ago\"";
 }
 
 static String statusJson() {
@@ -184,7 +184,7 @@ static void logActivity(ActivityKind kind, uint32_t node, int slot, uint32_t a =
                         uint8_t flags = 0) {
     ActivityEntry e{};
     e.uptimeSec = millis() / 1000;
-    e.unix = timeValid() ? (uint32_t)time(nullptr) : 0;
+    e.unixTime = timeValid() ? (uint32_t)time(nullptr) : 0;
     e.kind = kind;
     e.node = node;
     e.chanSlot = (int8_t)slot;

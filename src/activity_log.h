@@ -7,7 +7,7 @@
 enum ActivityKind : uint8_t { ACT_DISCOVER, ACT_ANNOUNCE, ACT_REQUEST, ACT_BATCH, ACT_HELD, ACT_TX_FAIL };
 
 struct ActivityEntry {
-    uint32_t uptimeSec, unix;   // unix 0 = clock unset
+    uint32_t uptimeSec, unixTime;   // unixTime 0 = clock unset
     uint8_t  kind;
     uint32_t node;              // 0 for ACT_HELD
     int8_t   chanSlot;          // -1 discovery / none
