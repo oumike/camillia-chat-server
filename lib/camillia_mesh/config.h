@@ -16,8 +16,13 @@
 #define MESH_RADIO_HAS_TCXO 1
 #define LORA_BW_CODE_MIN   16
 
+#if defined(CS_BOARD_WIO_L2)
+#define MESH_HW_MODEL_SEEED_WIO_TRACKER_L2  137
+#define MY_HW_MODEL MESH_HW_MODEL_SEEED_WIO_TRACKER_L2
+#else
 #define MESH_HW_MODEL_HELTEC_V4  110
 #define MY_HW_MODEL MESH_HW_MODEL_HELTEC_V4
+#endif
 
 // 10 store channels + the camillia-cs discovery channel (always slot 10).
 #define MESH_CHANNELS     11
