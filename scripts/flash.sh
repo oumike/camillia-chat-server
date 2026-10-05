@@ -1,7 +1,8 @@
 #!/bin/bash
-# Flash the camillia chat server to a connected Heltec WiFi LoRa 32 V4, plain
-# (camillia-chat-server-heltec-v4-vX.Y.Z.bin) or with the expansion board
-# (camillia-chat-server-heltec-v4-expansion-vX.Y.Z.bin).
+# Flash the camillia chat server to a connected board: a Heltec WiFi LoRa 32 V4,
+# plain (camillia-chat-server-heltec-v4-vX.Y.Z.bin) or with the expansion board
+# (camillia-chat-server-heltec-v4-expansion-vX.Y.Z.bin), or a Seeed Wio Tracker
+# L2 (camillia-chat-server-wio-tracker-l2-vX.Y.Z.bin).
 # Expects the merged factory image (bootloader + partitions + boot_app0 + app)
 # published by the release workflow.
 # That layout is written at 0x0; an app-only firmware.bin from .pio/build/ is
@@ -46,7 +47,8 @@ if [[ -z "$FIRMWARE" ]]; then
 fi
 
 if [[ -z "$FIRMWARE" || ! -f "$FIRMWARE" ]]; then
-    echo "Usage: ./flash.sh [--erase|-E] <camillia-chat-server-heltec-v4[-expansion]-vX.Y.Z.bin> [port]"
+    echo "Usage: ./flash.sh [--erase|-E] <camillia-chat-server-BOARD-vX.Y.Z.bin> [port]"
+    echo "  BOARD: heltec-v4, heltec-v4-expansion or wio-tracker-l2"
     exit 1
 fi
 
