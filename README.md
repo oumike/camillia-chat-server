@@ -10,3 +10,4 @@ Camillia chat server
 | Seeed Wio Tracker L2 | `wio-tracker-l2` | `camillia-chat-server-wio-tracker-l2-<tag>.bin` |
 
 The expansion build uses the TFT with touch; the plain board uses its OLED.
+The Wio Tracker L2 build uses its TFT with touch, and the Wake button acts as a tap.

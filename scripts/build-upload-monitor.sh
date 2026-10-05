@@ -16,15 +16,16 @@ RUN_TESTS=false
 PORT=""
 
 show_usage() {
-	echo "Usage: $0 [--expansion|-X] [--erase|-E] [--fullclean|-F] [--just-build|-B] [--test|-T] [--port|-p PORT]"
+	echo "Usage: $0 [--expansion|-X | --wio|-W] [--erase|-E] [--fullclean|-F] [--just-build|-B] [--test|-T] [--port|-p PORT]"
 	echo "  --expansion, -X   Build the Heltec V4 + expansion board (TFT) env instead of the plain V4"
+	echo "  --wio, -W         Build the Seeed Wio Tracker L2 env instead of the plain V4"
 	echo "  --erase, -E       Erase the whole flash before uploading (settings and stored"
 	echo "                    messages are wiped too)"
 	echo "  --fullclean, -F   Run PlatformIO fullclean before building"
 	echo "  --just-build, -B  Compile only - no upload, no monitor, no device needed"
 	echo "  --test, -T        Run the native unit tests first; stop if any fail"
 	echo "  --port, -p PORT   Serial port to use (default: PlatformIO auto-detect)"
-	echo "Builds the '$ENV_NAME' environment (default heltec-v4, or heltec-v4-expansion with -X)."
+	echo "Builds the '$ENV_NAME' environment (default heltec-v4; heltec-v4-expansion with -X, wio-tracker-l2 with -W)."
 }
 
 format_duration() {
@@ -55,6 +56,7 @@ fi
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--expansion|-X)  ENV_NAME="heltec-v4-expansion" ;;
+		--wio|-W)        ENV_NAME="wio-tracker-l2" ;;
 		--erase|-E)      ERASE_FIRST=true ;;
 		--fullclean|-F)  FULLCLEAN=true ;;
 		--just-build|-B) JUST_BUILD=true ;;
