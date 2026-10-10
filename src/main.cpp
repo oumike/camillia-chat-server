@@ -16,6 +16,7 @@
 #include "mesh_proto.h"
 #include "node_identity.h"
 #include "node_names.h"
+#include "ota_update.h"
 #include "persistence.h"
 #include "radio_link.h"
 #include "settings.h"
@@ -62,12 +63,44 @@ static String ipText() {
     return "AP " + WiFi.softAPIP().toString();
 }
 
+static String apSsid() { return String("camillia-cs-") + s_settings.shortName; }
+
+static void apStart() {
+    WiFi.softAP(apSsid().c_str());   // open: no password on the config AP
+    Serial.printf("[cs] AP %s at %s\n", apSsid().c_str(), WiFi.softAPIP().toString().c_str());
+}
+
 static void wifiBegin() {
     WiFi.mode(s_settings.staSsid[0] ? WIFI_AP_STA : WIFI_AP);
-    String ssid = String("camillia-cs-") + s_settings.shortName;
-    WiFi.softAP(ssid.c_str());   // open: no password on the config AP
+    WiFi.setAutoReconnect(true);
+    apStart();
     if (s_settings.staSsid[0]) WiFi.begin(s_settings.staSsid, s_settings.staPass);
-    Serial.printf("[cs] AP %s at %s\n", ssid.c_str(), WiFi.softAPIP().toString().c_str());
+}
+
+// The config AP is only up while the home network isn't: it goes down once the
+// station joins, and comes back if the station has been off it for 30 s.
+static void wifiLoop(uint32_t nowMs) {
+    static constexpr uint32_t kApBackAfterMs = 30000;
+    static uint32_t staDownSinceMs = 0;
+    if (!s_settings.staSsid[0]) return;
+    const bool joined = WiFi.status() == WL_CONNECTED;
+    const bool apOn = WiFi.getMode() & WIFI_MODE_AP;
+    if (joined) {
+        staDownSinceMs = 0;
+        if (apOn) {
+            WiFi.softAPdisconnect(true);
+            WiFi.mode(WIFI_STA);
+            Serial.printf("[cs] wifi joined \"%s\" as %s; config AP off\n", s_settings.staSsid,
+                          WiFi.localIP().toString().c_str());
+        }
+        return;
+    }
+    if (!staDownSinceMs) staDownSinceMs = nowMs ? nowMs : 1;
+    if (!apOn && nowMs - staDownSinceMs >= kApBackAfterMs) {
+        Serial.printf("[cs] wifi \"%s\" lost; config AP back on\n", s_settings.staSsid);
+        WiFi.mode(WIFI_AP_STA);
+        apStart();
+    }
 }
 
 static const char *presetName(uint8_t i) { return i < PRESET_COUNT ? kPresets[i].channelName : nullptr; }
@@ -85,12 +118,14 @@ static String lastSentJson() {
     return unixTime ? String(unixTime) : "\"" + String(millis() / 1000 - up) + "s ago\"";
 }
 
+static const char *const kBattNames[] = {"absent", "external", "present"};
+
 static String statusJson() {
     uint32_t mqttRx, mqttDec;
     mqttCounters(mqttRx, mqttDec);
     String j = "{\"node\":\"" + String(s_settings.longName) + "\",\"nodeId\":\"!" +
                String(s_nodeId, HEX) + "\",\"ip\":\"" + ipText() + "\",\"uptimeSec\":" +
-               String(millis() / 1000) + ",\"clockSet\":" + (timeValid() ? "true" : "false") + ",\"batteryV\":" + String(batteryVolts(), 2) + ",\"mqtt\":\"" + mqttState() + "\",\"mqttEnvelopes\":" + String(mqttRx) +
+               String(millis() / 1000) + ",\"clockSet\":" + (timeValid() ? "true" : "false") + ",\"batteryV\":" + String(batteryVolts(), 2) + ",\"batteryPct\":" + String(batteryPercentFromVolts(batteryVolts())) + ",\"battery\":\"" + kBattNames[batteryStateFromVolts(batteryVolts())] + "\"" + ",\"mqtt\":\"" + mqttState() + "\",\"mqttEnvelopes\":" + String(mqttRx) +
                ",\"mqttDecrypted\":" + String(mqttDec) + ",\"mqttDropped\":" + mqttDiagJson() + ",\"lastSent\":" + lastSentJson() +
                ",\"channels\":[";
     for (int i = 0; i < s_settings.chanCount; i++) {
@@ -384,6 +419,7 @@ void setup() {
     wifiBegin();
     configTzTime(s_settings.tz, "pool.ntp.org");
     webBegin(&s_settings, [] { s_restartAtMs = millis() + 1500; }, statusJson, listMessages, clearMessages, storageJson);
+    otaBegin(&s_settings);
 
     static_assert(CS_MAX_CHANNELS == SETTINGS_MAX_CHANNELS, "store and settings channel limits differ");
     // Only configured channels get a ring (~55 KB of PSRAM each).
@@ -403,11 +439,10 @@ void loop() {
     const uint32_t nowMs = millis();
     webLoop();
 
-    static bool staLogged = false;
-    if (!staLogged && WiFi.status() == WL_CONNECTED) {
-        staLogged = true;
-        Serial.printf("[cs] wifi joined \"%s\" as %s\n", s_settings.staSsid, WiFi.localIP().toString().c_str());
-    }
+    wifiLoop(nowMs);
+    otaLoop(nowMs);
+    // Give the web page a moment to show "installed" before the restart.
+    if (otaRestartPending() && !s_restartAtMs) s_restartAtMs = nowMs + 3000;
 
     MeshPacket pkt;
     while (radioPoll(pkt)) {

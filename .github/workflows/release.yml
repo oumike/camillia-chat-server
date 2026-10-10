@@ -1,9 +1,9 @@
 name: Release
 
 # Cuts a release end to end: picks the version, takes the notes, runs the tests,
-# builds, tags and publishes the factory image. The same shape as camillia-mt's
-# release.yml, minus OTA: there is no OTA image and no signing key, because the
-# chat server is updated over USB with the published flash.sh.
+# builds, tags and publishes the factory and signed OTA images. The same shape as
+# camillia-mt's release.yml. The OTA signing key (shared with camillia-mt) lives
+# in the `release` environment as the OTA_SIGNING_KEY secret.
 #
 # Manual-only: a release is always something a human asked for, from the
 # Actions tab or from `./scripts/release.sh` (which writes and reviews the notes
@@ -39,6 +39,7 @@ jobs:
     name: Build and publish
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    environment: release
 
     steps:
       - name: Checkout
@@ -75,6 +76,24 @@ jobs:
         # file only exists once the Arduino ESP32 framework has been downloaded.
         run: pio pkg install -e heltec-v4
 
+      - name: Install OTA signing key
+        env:
+          OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OTA_SIGNING_KEY:-}" ]; then
+            echo "::error::OTA_SIGNING_KEY is not set on the 'release' environment."
+            echo "::error::Add the contents of camillia-mt's ota_signing_key.pem as that secret."
+            exit 1
+          fi
+          printf '%s\n' "$OTA_SIGNING_KEY" > ota_signing_key.pem
+          chmod 600 ota_signing_key.pem
+          if ! openssl ec -in ota_signing_key.pem -noout 2>/dev/null; then
+            echo "::error::OTA_SIGNING_KEY is not a readable EC private key."
+            exit 1
+          fi
+          # release.sh also checks the key against src/ota_signing_pubkey.h.
+
       - name: Cut the release
         id: cut
         env:
@@ -103,3 +122,7 @@ jobs:
           name: debug-symbols-${{ steps.cut.outputs.tag }}
           path: dist/*.elf
           retention-days: 90
+
+      - name: Remove OTA signing key
+        if: always()
+        run: rm -f ota_signing_key.pem

@@ -1,4 +1,4 @@
-"""Injects CS_VERSION into the build from the VERSION file.
+"""Injects CS_VERSION (from the VERSION file) and CS_PIO_ENV into the build.
 
 Same job as camillia-mt's tools/set_app_version.py: scripts/release.sh writes
 VERSION before it builds, so the version the OLED shows is the version the
@@ -19,6 +19,9 @@ except OSError:
 
 if version.startswith("v"):
     version = version[1:]
+# The OTA updater fetches the release asset named after this env.
+env.Append(CPPDEFINES=[("CS_PIO_ENV", env.StringifyMacro(env["PIOENV"]))])  # noqa: F821
+
 if version:
     env.Append(CPPDEFINES=[("CS_VERSION", env.StringifyMacro(version))])  # noqa: F821
     print("[set_app_version] CS_VERSION=%s" % version)

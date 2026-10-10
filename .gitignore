@@ -2,3 +2,4 @@
 .superpowers/
 .vscode/
 dist/
+ota_signing_key.pem

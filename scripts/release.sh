@@ -1,6 +1,6 @@
 #!/bin/bash
 # Release the camillia chat server — modelled on camillia-mt's scripts/release.sh,
-# for this repo's boards and without OTA.
+# for this repo's boards.
 #
 # By default this script builds nothing: it works out the version, writes and
 # reviews RELEASE_NOTES.md, commits, pushes and dispatches
@@ -11,10 +11,13 @@
 #   camillia-chat-server-heltec-v4-vX.Y.Z.bin   merged factory image, written at 0x0
 #   camillia-chat-server-heltec-v4-expansion-vX.Y.Z.bin   same, for the V4 + expansion display board
 #   camillia-chat-server-wio-tracker-l2-vX.Y.Z.bin        same, for the Seeed Wio Tracker L2
+#   camillia-chat-server-<env>-vX.Y.Z-ota.bin    app image for over-the-air updates
+#   camillia-chat-server-<env>-vX.Y.Z-ota.bin.sig  detached ECDSA P-256 signature of it
 #   flash.sh                                     helper that writes it with esptool
 #
-# There is no OTA image and no signing key: the chat server is updated over USB.
-# Flashing the factory image leaves NVS (settings) and LittleFS (stored
+# OTA images are signed with ota_signing_key.pem (the same key as camillia-mt;
+# never committed). Its public half must match src/ota_signing_pubkey.h, which
+# devices verify every update against. Flashing the factory image leaves NVS (settings) and LittleFS (stored
 # messages) alone — both sit above the end of the image.
 
 set -e
@@ -267,6 +270,20 @@ else
         ESPTOOL="esptool.py"
     else
         echo "Error: esptool not found. Run: pip install esptool" >&2
+        exit 1
+    fi
+
+    # A wrong key would publish updates every device in the field rejects.
+    SIGNING_KEY="ota_signing_key.pem"
+    if [[ ! -s "$SIGNING_KEY" ]]; then
+        echo "Error: $SIGNING_KEY not found; OTA images cannot be signed." >&2
+        echo "Copy camillia-mt's ota_signing_key.pem here (it is git-ignored)." >&2
+        exit 1
+    fi
+    fresh_pub=$(openssl ec -in "$SIGNING_KEY" -pubout 2>/dev/null | grep -v -- '-----' | tr -d '\n')
+    baked_pub=$(grep -o '"[A-Za-z0-9+/=]\+' src/ota_signing_pubkey.h | tr -d '"' | tr -d '\n')
+    if [[ -z "$fresh_pub" || "$fresh_pub" != "$baked_pub" ]]; then
+        echo "Error: $SIGNING_KEY does not match src/ota_signing_pubkey.h." >&2
         exit 1
     fi
 fi
@@ -646,20 +663,39 @@ merge_assets() {
             0xe000  "$BOOT_APP0" \
             0x10000 "${d}/firmware.bin"
         cp "${d}/firmware.elf" "dist/camillia-chat-server-${out_name}-${tag}.elf"
+        # Detached ECDSA-P256/SHA-256 signature; the device checks it before
+        # committing the update, which is what makes plain-HTTP OTA safe.
+        ota_out="dist/camillia-chat-server-${out_name}-${tag}-ota.bin"
+        cp "${d}/firmware.bin" "${ota_out}"
+        openssl dgst -sha256 -sign "$SIGNING_KEY" -out "${ota_out}.sig" "${ota_out}"
+        echo "    signed -> ${ota_out}.sig"
     done
     install -m 0755 scripts/flash.sh dist/flash.sh
 }
 
 verify_assets() {
-    local tag="$1" env_name factory
+    local tag="$1" env_name factory ota asset verify_key
+    verify_key="$GUARD_DIR/ota-signing-public.pem"
+    openssl ec -in "$SIGNING_KEY" -pubout -out "$verify_key" 2>/dev/null
     echo "Verifying release assets..."
     for env_name in "${RELEASE_ENVS[@]}"; do
         factory="dist/camillia-chat-server-$(env_out_name "$env_name")-${tag}.bin"
-        if [[ ! -s "$factory" ]]; then
-            echo "Error: required release asset is missing or empty: $factory" >&2
+        ota="dist/camillia-chat-server-$(env_out_name "$env_name")-${tag}-ota.bin"
+        for asset in "$factory" "$ota" "${ota}.sig"; do
+            if [[ ! -s "$asset" ]]; then
+                echo "Error: required release asset is missing or empty: $asset" >&2
+                return 1
+            fi
+        done
+        if ! cmp -s ".pio/build/${env_name}/firmware.bin" "$ota"; then
+            echo "Error: OTA asset does not match ${env_name}/firmware.bin: $ota" >&2
             return 1
         fi
-        echo "  OK ${env_name}: $(basename "$factory")"
+        if ! openssl dgst -sha256 -verify "$verify_key" -signature "${ota}.sig" "$ota" >/dev/null; then
+            echo "Error: OTA signature does not verify: ${ota}.sig" >&2
+            return 1
+        fi
+        echo "  OK ${env_name}: $(basename "$factory"), $(basename "$ota") (signed)"
     done
     if [[ ! -s dist/flash.sh || ! -x dist/flash.sh ]]; then
         echo "Error: dist/flash.sh is missing or not executable" >&2
@@ -688,6 +724,7 @@ gh release create "$TAG" \
     "${RELEASE_FLAGS[@]}" \
     "${NOTES_ARGS[@]}" \
     dist/*.bin \
+    dist/*.sig \
     dist/*.sh
 
 echo ""

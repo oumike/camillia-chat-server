@@ -26,12 +26,19 @@ void settingsDefaults(Settings &s, uint32_t nodeId) {
     s.displayDimAfterSec = 120;
     s.displayDimLevel = 0;
     s.displayPageSec = 30;
+    s.otaAutoInstall = false;
 }
 
 bool settingsFromBlob(const uint8_t *blob, size_t len, uint8_t ver, Settings &out) {
-    if (ver == 5) {
+    if (ver == 6) {
         if (len != sizeof(Settings)) return false;
         memcpy(&out, blob, sizeof(Settings));
+        return true;
+    }
+    if (ver == 5) {
+        if (len != SETTINGS_V5_BLOB_LEN) return false;
+        settingsDefaults(out, 0);
+        memcpy(&out, blob, offsetof(Settings, otaAutoInstall));
         return true;
     }
     if (ver == 4) {

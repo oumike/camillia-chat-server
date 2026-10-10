@@ -180,9 +180,9 @@ The server has a normal Meshtastic node ID and short/long name, set in web confi
 
 ### 5.5 Web config
 
-Reached through the server's own WiFi access point, and optionally through a home WiFi network (STA) when configured.
+Reached through the server's own WiFi access point, or through a home WiFi network (STA) when configured. While the STA link is up the access point is off; it comes back after the STA link has been down for 30 s.
 
-Two tabs: **Config** (the settings below, status, and backup) and **Messages** (stored messages for one monitored channel, picked from a drop-down, newest first, showing time, sender, source LoRa/MQTT and text; refreshes every 15 s while open). The Messages tab can also **clear** the selected channel or all channels, after a confirmation; a cleared channel gets a new epoch and is saved immediately, and any queued or in-progress replies for it are dropped.
+Two tabs: **Config** (the settings below, firmware updates, and backup) and **System Monitor** (live status, storage use, and the stored messages for one monitored channel, picked from a drop-down, newest first, showing time, sender, source LoRa/MQTT and text; refreshes every 15 s while open). The System Monitor tab can also **clear** the selected channel or all channels, after a confirmation; a cleared channel gets a new epoch and is saved immediately, and any queued or in-progress replies for it are dropped.
 
 | Section | Settings | Default |
 |---|---|---|
@@ -193,8 +193,9 @@ Two tabs: **Config** (the settings below, status, and backup) and **Messages** (
 | | Gap between packets | 3 s |
 | | Max hops | 7 |
 | MQTT | Enabled, broker, port, username, password, topic root | Off |
-| WiFi | Optional STA SSID/password (also used for NTP). The config AP `camillia-cs-<short name>` is always open (no password) | AP only |
-| Status | Per-channel message counts, last message heard, MQTT state, queue length | — |
+| WiFi | Optional STA SSID/password (also used for NTP). The config AP `camillia-cs-<short name>` is open (no password) and is off while the STA link is up | AP only |
+| Firmware | Check for and install signed OTA updates (§5.8); install updates automatically | Off |
+| Status | Per-channel message counts, last message heard, MQTT state, queue length (System Monitor tab) | — |
 | Backup | **Export** the whole config as a YAML file; **Import** a YAML file (upload or paste). Import validates first, then saves and restarts; keys it doesn't mention keep their values. The file includes channel keys and passwords | — |
 
 With the defaults, clearing a full 250-message channel takes about 25 rounds of about 70 seconds each. In regions with a duty-cycle limit (for example EU 868 at 10%), the server must throttle its replies to stay within the limit, even if that is slower than the configured pacing.
@@ -206,18 +207,27 @@ One plain, readable status page (layout may change later):
 ```
 Camillia Chat Server
 <node name>            (long name, configurable in web config)
-<IP address>
 MQTT: <off | no wifi | connecting | connected>
 Stored: <number of messages stored, all channels>
+────────────────────────
+<IP address>           (footer, always shown; the IP appears nowhere else)
 ```
 
-The time of the last reply sent to a node is shown on the web status instead (`lastSent`). A battery icon sits at the top right: an outline filled by charge (same Li-ion curve as camillia-mt), a "+" on USB power, hidden when no battery is connected; the voltage is also in the web status (`batteryV`).
+The time of the last reply sent to a node is shown on the web status instead (`lastSent`). A battery icon sits at the top right: an outline filled by charge (same Li-ion curve as camillia-mt), a "+" on USB power, and an empty outline with a dash when no battery is connected (always shown); the voltage is also in the web status (`batteryV`).
 
 At boot, a splash shows for 3 seconds before the status page: camillia-mt's camellia drawn in 1 bit (white petals with black edges, dark centre with stamens, stem and leaves) beside "Camillia / Chat Server / v<version>".
 
 ### 5.7 MQTT ingest
 
 Off by default. When on, the server subscribes under the configured topic root for its monitored channels, decodes and decrypts each `ServiceEnvelope` with `mesh_proto`, and stores the text messages exactly like LoRa ones. It never publishes. If the broker is unreachable, it retries with backoff and keeps working on LoRa.
+
+### 5.8 OTA updates
+
+Same scheme as camillia-mt. Pull-only over plain HTTP from the proxy `http://ota.camillia.sumat.org/chat-server`: `GET /latest` returns the latest GitHub release JSON for this repo, and `GET /<tag>/<asset>` serves its assets. Only stable releases newer than the running version are offered; dev builds never auto-install.
+
+Each release ships `camillia-chat-server-<env>-<tag>-ota.bin` (the app image) and `<that>.sig`, a DER ECDSA P-256 signature over the image's SHA-256, made with the same key as camillia-mt. The device fetches the signature, streams the image into the inactive OTA slot while hashing it, and verifies the signature against `src/ota_signing_pubkey.h` before it marks the slot bootable. Any failure leaves the running image untouched.
+
+The device checks 20 s after WiFi joins, then daily (an hour later after a failed check). The web config's Firmware card shows the state and can check or install on demand (`GET /ota`, `POST /ota/check`, `POST /ota/install`). With `ota.autoInstall` on, a newer release is installed once and the server restarts, saving its stores first.
 
 ## 6. camillia-mt client
 

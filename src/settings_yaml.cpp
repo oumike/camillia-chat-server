@@ -115,6 +115,8 @@ std::string settingsToYaml(const Settings &s, const YamlPresetMap &presets) {
     kv(y, "  ", "dimAfterSec", num(s.displayDimAfterSec));
     kv(y, "  ", "dimLevel", num(s.displayDimLevel));
     kv(y, "  ", "pageSec", num(s.displayPageSec));
+    y += "ota:\n";
+    kv(y, "  ", "autoInstall", s.otaAutoInstall ? "true" : "false");
     return y;
 }
 
@@ -208,6 +210,11 @@ bool settingsFromYaml(const char *text, Settings &out, const YamlPresetMap &pres
             else if (k == "dimAfterSec") { if (!toLong(v, 0, 3600, n)) return bad("dimAfterSec"); s.displayDimAfterSec = (uint16_t)n; }
             else if (k == "dimLevel") { if (!toLong(v, 0, 255, n)) return bad("dimLevel"); s.displayDimLevel = (uint8_t)n; }
             else if (k == "pageSec") { if (!toLong(v, 10, 300, n)) return bad("pageSec"); s.displayPageSec = (uint16_t)n; }
+        } else if (section == "ota") {
+            if (k == "autoInstall") {
+                if (v != "true" && v != "false") return bad("autoInstall");
+                s.otaAutoInstall = v == "true";
+            }
         }
     }
 

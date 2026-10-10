@@ -144,6 +144,18 @@ void test_display_bad_value() {
     TEST_ASSERT_NOT_NULL(strstr(err, "pageSec"));
 }
 
+void test_ota_auto_install_roundtrip() {
+    Settings a, b;
+    settingsDefaults(a, 1);
+    a.otaAutoInstall = true;
+    std::string y = settingsToYaml(a, kMap);
+    settingsDefaults(b, 1);
+    char err[96] = "";
+    TEST_ASSERT_TRUE_MESSAGE(settingsFromYaml(y.c_str(), b, kMap, err, sizeof err), err);
+    TEST_ASSERT_TRUE(b.otaAutoInstall);
+    TEST_ASSERT_FALSE(settingsFromYaml("ota:\n  autoInstall: yes\n", b, kMap, err, sizeof err));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_yaml_round_trip);
@@ -153,5 +165,6 @@ int main() {
     RUN_TEST(test_yaml_ten_channels);
     RUN_TEST(test_display_roundtrip);
     RUN_TEST(test_display_bad_value);
+    RUN_TEST(test_ota_auto_install_roundtrip);
     return UNITY_END();
 }

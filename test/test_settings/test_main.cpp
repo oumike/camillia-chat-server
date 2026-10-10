@@ -142,6 +142,20 @@ void test_upgrade_v4_blob() {
     TEST_ASSERT_EQUAL(30, s.displayPageSec);
 }
 
+void test_upgrade_v5_blob() {
+    Settings old;
+    settingsDefaults(old, 1);
+    old.displayPageSec = 99;
+    uint8_t blob[sizeof(Settings)];
+    memcpy(blob, &old, sizeof blob);
+    blob[offsetof(Settings, otaAutoInstall)] = 0xEE;   // stale tail padding in a real v5 blob
+    Settings s;
+    memset(&s, 0xEE, sizeof s);
+    TEST_ASSERT_TRUE(settingsFromBlob(blob, SETTINGS_V5_BLOB_LEN, 5, s));
+    TEST_ASSERT_EQUAL(99, s.displayPageSec);
+    TEST_ASSERT_FALSE(s.otaAutoInstall);
+}
+
 void test_blob_current_and_bad() {
     Settings a, b;
     settingsDefaults(a, 1);
@@ -149,10 +163,13 @@ void test_blob_current_and_bad() {
     strcpy(a.longName, "Cur");
     uint8_t blob[sizeof(Settings)];
     memcpy(blob, &a, sizeof blob);
-    TEST_ASSERT_TRUE(settingsFromBlob(blob, sizeof blob, 5, b));
+    a.otaAutoInstall = true;
+    memcpy(blob, &a, sizeof blob);
+    TEST_ASSERT_TRUE(settingsFromBlob(blob, sizeof blob, 6, b));
     TEST_ASSERT_EQUAL_STRING("Cur", b.longName);
     TEST_ASSERT_EQUAL(77, b.displayPageSec);
-    TEST_ASSERT_FALSE(settingsFromBlob(blob, sizeof blob - 1, 5, b));
+    TEST_ASSERT_TRUE(b.otaAutoInstall);
+    TEST_ASSERT_FALSE(settingsFromBlob(blob, sizeof blob - 1, 6, b));
     TEST_ASSERT_FALSE(settingsFromBlob(blob, sizeof blob, 4, b));
     TEST_ASSERT_FALSE(settingsFromBlob(blob, SETTINGS_V4_BLOB_LEN, 3, b));
 }
@@ -166,6 +183,7 @@ int main() {
     RUN_TEST(test_display_defaults);
     RUN_TEST(test_display_ranges);
     RUN_TEST(test_upgrade_v4_blob);
+    RUN_TEST(test_upgrade_v5_blob);
     RUN_TEST(test_blob_current_and_bad);
     return UNITY_END();
 }

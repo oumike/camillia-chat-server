@@ -75,13 +75,16 @@ void displayBegin() {
 }
 
 // Top-right battery: 13x7 outline + nub, filled by charge; a "+" when on USB
-// power; nothing when no cell is connected.
+// power; a dash when no cell is connected. Always drawn.
 static void drawBattery(const DisplayStatus &st) {
-    if (st.battState == BATT_ABSENT) return;
     const int x = 113, y = 1, w = 13, h = 7;
     s_oled.setColor(WHITE);
     s_oled.drawRect(x, y, w, h);
     s_oled.fillRect(x + w, y + 2, 2, h - 4);
+    if (st.battState == BATT_ABSENT) {
+        s_oled.drawHorizontalLine(x + 4, y + 3, 5);
+        return;
+    }
     if (st.battState == BATT_EXTERNAL) {
         s_oled.drawHorizontalLine(x + 4, y + 3, 5);
         s_oled.drawVerticalLine(x + 6, y + 1, 5);
@@ -106,12 +109,14 @@ void displayUpdate(const DisplayStatus &st) {
 
     s_oled.clear();
     const char *title = "Camillia Chat Server";
-    if (st.battState != BATT_ABSENT && s_oled.getStringWidth(title) > 110) title = "Camillia CS";
+    if (s_oled.getStringWidth(title) > 110) title = "Camillia CS";
     s_oled.drawString(0, 0, title);
     drawBattery(st);
     s_oled.drawString(0, 12, st.nodeName);
-    s_oled.drawString(0, 24, st.ip);
-    s_oled.drawString(0, 36, mqtt);
-    s_oled.drawString(0, 48, stored);
+    s_oled.drawString(0, 24, mqtt);
+    s_oled.drawString(0, 36, stored);
+    // Footer: the IP address, on its own below a rule, and nowhere else.
+    s_oled.drawHorizontalLine(0, 50, 128);
+    s_oled.drawString(0, 51, st.ip[0] ? st.ip : "IP --");
     s_oled.display();
 }

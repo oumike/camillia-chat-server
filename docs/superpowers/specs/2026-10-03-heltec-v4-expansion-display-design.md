@@ -154,25 +154,27 @@ public:
 
 ### 6.2 Layout (landscape 320×240)
 
-**Status bar (every page, top 20 px):** "Camillia Chat Server" on the left. On the right: the clock `HH:MM` (only when the clock is set), the battery icon (same states as the OLED: absent, external, or percent) and three page dots.
+**Status bar (every page, top 20 px):** "Camillia Chat Server" on the left. On the right: the clock `HH:MM` (only when the clock is set), the battery icon, always shown (same states as the OLED: absent as an empty icon with `--`, external, or percent) and three page dots.
+
+**Footer (every page, bottom 16 px):** the IP address, centred: `IP x.x.x.x` or `AP x.x.x.x`. Always shown, and the only place the IP appears.
 
 **Page 1: Health**
 
 | Section | Content |
 |---|---|
 | Node | long name and `!nodeid`, short name, region and preset |
-| Network | IP or `AP x.x.x.x`, MQTT state and received/decrypted counts |
+| Network | MQTT state and received/decrypted counts (the IP is in the footer) |
 | Radio | last RX `12s ago  -97 dBm  6.5 dB` (or `none yet`), airtime in the last hour against the limit, e.g. `0.8% / 10%` (`/ none` when the limit is 100%) |
 | Store | per channel `name  count/250`, up to 10 rows in two columns; flash used/total KB; free PSRAM KB |
 | System | uptime `3d 4h`, `clock set` or `clock not set`, battery `3.92 V 78%` (or `USB`) |
 
-**Page 2: Message feed.** The newest 7 stored messages across all channels, newest first, ordered by receive time (unix when set, otherwise uptime this boot; messages loaded from a previous boot come after messages heard this boot). Each message takes two lines:
+**Page 2: Message feed.** The newest 6 stored messages across all channels, newest first, ordered by receive time (unix when set, otherwise uptime this boot; messages loaded from a previous boot come after messages heard this boot). Each message takes two lines:
 - line 1: `#chan`, the sender's `displayName`, the age (`now`, `3m`, `2h`, `4d`, or `?` when unknown), and an `MQTT` badge if the source is MQTT
 - line 2: the text on one line, cut with `…`
 
 Empty state: "No messages yet".
 
-**Page 3: Sync activity.** The newest 11 `activity_log` entries, one line each: age, the node's `displayName` (`-` for `ACT_HELD`), and the detail from §5.2. Empty state: "No sync activity yet".
+**Page 3: Sync activity.** The newest 10 `activity_log` entries, one line each: age, the node's `displayName` (`-` for `ACT_HELD`), and the detail from §5.2. Empty state: "No sync activity yet".
 
 **Redraw:** label text is updated at most once a second (as on the OLED), and immediately when the page changes. `lv_timer_handler()` runs on every `displayUpdate()` call.
 

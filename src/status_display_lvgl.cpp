@@ -21,10 +21,10 @@
 namespace {
 
 constexpr int32_t  kW = TFT_LANDSCAPE_W, kH = TFT_LANDSCAPE_H;
-constexpr int32_t  kBarH = 20;
+constexpr int32_t  kBarH = 20, kFootH = 16;
 constexpr int32_t  kBufLines = 40;
 constexpr uint32_t kSplashMs = 3000;
-constexpr int      kFeedRows = 7, kActRows = 11, kChanRows = 5;
+constexpr int      kFeedRows = 6, kActRows = 10, kChanRows = 5;
 
 // camillia-mt's "Camillia Dark" theme preset (kUiThemePresets[0]) and splash text colours.
 constexpr uint16_t kBgMain = 0x0843, kPanelBg = 0x1065, kPanelAlt = 0x18A7, kAccent = 0xDA8E;
@@ -40,9 +40,10 @@ uint32_t       s_splashUntilMs = 0;
 
 lv_obj_t *s_main = nullptr;
 lv_obj_t *s_barRight = nullptr;
+lv_obj_t *s_footIp = nullptr;
 lv_obj_t *s_dots[3];
 lv_obj_t *s_page[3];
-lv_obj_t *s_p1[8];                       // page 1 single rows
+lv_obj_t *s_p1[7];                       // page 1 single rows
 lv_obj_t *s_p1Chan[kChanRows * 2];       // page 1 store rows, two columns
 lv_obj_t *s_msgHead[kFeedRows], *s_msgText[kFeedRows], *s_msgEmpty = nullptr;
 lv_obj_t *s_act[kActRows], *s_actEmpty = nullptr;
@@ -279,19 +280,26 @@ void buildMain() {
         lv_obj_set_style_bg_color(s_dots[i], dim, 0);
     }
 
+    // Footer, on every page: the IP address (shown nowhere else).
+    lv_obj_t *foot = mkBox(s_main, 0, kH - kFootH, kW, kFootH);
+    lv_obj_set_style_bg_color(foot, c565(kPanelBg), 0);
+    lv_obj_set_style_bg_opa(foot, LV_OPA_COVER, 0);
+    s_footIp = mkRow(foot, &lv_font_montserrat_12, text, 4, 1, kW - 8);
+    lv_obj_set_style_text_align(s_footIp, LV_TEXT_ALIGN_CENTER, 0);
+
     for (int i = 0; i < 3; i++) {
-        s_page[i] = mkBox(s_main, 0, kBarH, kW, kH - kBarH);
+        s_page[i] = mkBox(s_main, 0, kBarH, kW, kH - kBarH - kFootH);
         setVisible(s_page[i], false);
     }
 
-    // Page 1: health. 13 rows of 16 px; rows 6-10 are the store, two columns.
+    // Page 1: health. 12 rows of 16 px; rows 5-9 are the store, two columns.
     const lv_font_t *f12 = &lv_font_montserrat_12;
     auto rowY = [](int row) { return (int32_t)(3 + row * 16); };
-    for (int i = 0; i < 6; i++) s_p1[i] = mkRow(s_page[0], f12, i == 0 ? accent : text, 6, rowY(i), 308);
+    for (int i = 0; i < 5; i++) s_p1[i] = mkRow(s_page[0], f12, i == 0 ? accent : text, 6, rowY(i), 308);
     for (int i = 0; i < kChanRows * 2; i++)
-        s_p1Chan[i] = mkRow(s_page[0], f12, dim, (i % 2) ? 163 : 6, rowY(6 + i / 2), 151);
+        s_p1Chan[i] = mkRow(s_page[0], f12, dim, (i % 2) ? 163 : 6, rowY(5 + i / 2), 151);
+    s_p1[5] = mkRow(s_page[0], f12, text, 6, rowY(10), 308);
     s_p1[6] = mkRow(s_page[0], f12, text, 6, rowY(11), 308);
-    s_p1[7] = mkRow(s_page[0], f12, text, 6, rowY(12), 308);
 
     // Page 2: message feed, two lines per message (15 + 16 px).
     for (int i = 0; i < kFeedRows; i++) {
@@ -316,18 +324,27 @@ void fillBar(const DisplayStatus &st) {
         localtime_r(&t, &tm);
         snprintf(clock, sizeof clock, "%02d:%02d", tm.tm_hour, tm.tm_min);
     }
-    char batt[16] = "";
+    char batt[16];
     if (st.battState == BATT_EXTERNAL) {
         snprintf(batt, sizeof batt, "%s", LV_SYMBOL_CHARGE);
-    } else if (st.battState != BATT_ABSENT) {
+    } else if (st.battState == BATT_ABSENT) {
+        snprintf(batt, sizeof batt, "%s --", LV_SYMBOL_BATTERY_EMPTY);
+    } else {
         const char *icon = st.battPct >= 90 ? LV_SYMBOL_BATTERY_FULL : st.battPct >= 65 ? LV_SYMBOL_BATTERY_3
                          : st.battPct >= 40 ? LV_SYMBOL_BATTERY_2 : st.battPct >= 15 ? LV_SYMBOL_BATTERY_1
                          : LV_SYMBOL_BATTERY_EMPTY;
         snprintf(batt, sizeof batt, "%s %u%%", icon, (unsigned)st.battPct);
     }
     char buf[32];
-    snprintf(buf, sizeof buf, "%s%s%s", clock, clock[0] && batt[0] ? "  " : "", batt);
+    snprintf(buf, sizeof buf, "%s%s%s", clock, clock[0] ? "  " : "", batt);
     setText(s_barRight, buf);
+}
+
+void fillFooter(const DisplayStatus &st) {
+    char buf[40];
+    if (!st.ip[0]) snprintf(buf, sizeof buf, "IP --");
+    else snprintf(buf, sizeof buf, "%s%s", strncmp(st.ip, "AP ", 3) == 0 ? "" : "IP ", st.ip);
+    setText(s_footIp, buf);
 }
 
 void nameOf(const DisplayStatus &st, uint32_t id, char *out, size_t cap) {
@@ -347,21 +364,19 @@ void fillHealth(const DisplayStatus &st) {
     const char *preset = s && s->modemPreset < PRESET_COUNT ? kPresets[s->modemPreset].channelName : "?";
     snprintf(buf, sizeof buf, "Region %s  Preset %s", s ? s->region : "?", preset);
     setText(s_p1[1], buf);
-    snprintf(buf, sizeof buf, "%s%s", strncmp(st.ip, "AP ", 3) == 0 ? "" : "IP ", st.ip);
-    setText(s_p1[2], buf);
     snprintf(buf, sizeof buf, "MQTT %s  rx %u  decrypted %u", st.mqtt ? st.mqtt : "?", (unsigned)st.mqttRx,
              (unsigned)st.mqttDecrypted);
-    setText(s_p1[3], buf);
+    setText(s_p1[2], buf);
     if (st.haveLastRx) {
         formatUptime(st.lastRxAgeSec, t1, sizeof t1);
         snprintf(buf, sizeof buf, "Last RX %s ago  %.0f dBm  %.1f dB", t1, st.lastRssi, st.lastSnr);
     } else {
         snprintf(buf, sizeof buf, "Last RX none yet");
     }
-    setText(s_p1[4], buf);
+    setText(s_p1[3], buf);
     if (st.dutyLimitPct >= 100) snprintf(buf, sizeof buf, "Airtime (1 h) %.1f%% / none", st.airtimePct);
     else snprintf(buf, sizeof buf, "Airtime (1 h) %.1f%% / %u%%", st.airtimePct, (unsigned)st.dutyLimitPct);
-    setText(s_p1[5], buf);
+    setText(s_p1[4], buf);
     for (int i = 0; i < kChanRows * 2; i++) {
         if (i < st.chanCount) {
             const char *n = chanOf(st, i);
@@ -373,13 +388,13 @@ void fillHealth(const DisplayStatus &st) {
     }
     snprintf(buf, sizeof buf, "Flash %u / %u KB   PSRAM free %u KB", (unsigned)st.flashUsedKB,
              (unsigned)st.flashTotalKB, (unsigned)st.psramFreeKB);
-    setText(s_p1[6], buf);
+    setText(s_p1[5], buf);
     formatUptime(st.uptimeSec, t1, sizeof t1);
     char batt[24];
     if (st.battState == BATT_PRESENT) snprintf(batt, sizeof batt, "%.2f V %u%%", st.battVolts, (unsigned)st.battPct);
     else snprintf(batt, sizeof batt, "USB");
     snprintf(buf, sizeof buf, "Up %s   %s   %s", t1, st.clockSet ? "clock set" : "clock not set", batt);
-    setText(s_p1[7], buf);
+    setText(s_p1[6], buf);
 }
 
 void fillFeed(const DisplayStatus &st) {
@@ -503,6 +518,7 @@ void displayUpdate(const DisplayStatus &st) {
     if (pageChanged || now - s_lastFillMs >= 1000) {
         s_lastFillMs = now;
         fillBar(st);
+        fillFooter(st);
         if (page == 0) fillHealth(st);
         else if (page == 1) fillFeed(st);
         else fillActivity(st);
