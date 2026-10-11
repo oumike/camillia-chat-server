@@ -1,4 +1,6 @@
-// Status display for the 320x240 TFT builds: LVGL 9.5 (spec §6). Panel,
+// Status display for the colour TFT builds: LVGL 9.5 (spec §6). Laid out for
+// 320x240 and scaled from the panel's landscape size (TFT_LANDSCAPE_W/H): font
+// tier, row heights and how many rows each page shows follow the panel. Panel,
 // backlight, touch and the Wake button are behind display_hal.h, one file per
 // board. The plain V4 builds status_display_oled.cpp instead (platformio.ini
 // build_src_filter).
@@ -21,10 +23,69 @@
 namespace {
 
 constexpr int32_t  kW = TFT_LANDSCAPE_W, kH = TFT_LANDSCAPE_H;
-constexpr int32_t  kBarH = 20, kFootH = 16;
 constexpr int32_t  kBufLines = 40;
 constexpr uint32_t kSplashMs = 3000;
-constexpr int      kFeedRows = 6, kActRows = 10, kChanRows = 5;
+
+// Size tier from the panel height: 0 = up to ~240 px (the original layout),
+// 1 = 320 px class, 2 = 480 px and up.
+constexpr int kTier = kH >= 450 ? 2 : kH >= 300 ? 1 : 0;
+constexpr int kMargin = kTier == 2 ? 12 : kTier == 1 ? 8 : 6;
+constexpr int kFlowerScale = kTier == 2 ? 2 : 1;
+
+// Upper bounds for the per-page row arrays; the counts actually shown are
+// worked out from the panel in computeLayout().
+constexpr int kMaxFeedRows = 16, kMaxActRows = 24, kMaxChanSlots = 24;
+
+struct Fonts {
+    const lv_font_t *small;    // health rows, message headers, footer, clock
+    const lv_font_t *body;     // message text, activity rows
+    const lv_font_t *big;      // empty-page notes
+    const lv_font_t *title;    // status bar title
+    const lv_font_t *splash1, *splash2, *splash3;
+};
+
+Fonts fonts() {
+    if (kTier == 2)
+        return {&lv_font_montserrat_20, &lv_font_montserrat_24, &lv_font_montserrat_28, &lv_font_montserrat_24,
+                &lv_font_montserrat_28, &lv_font_montserrat_24, &lv_font_montserrat_20};
+    if (kTier == 1)
+        return {&lv_font_montserrat_14, &lv_font_montserrat_16, &lv_font_montserrat_20, &lv_font_montserrat_16,
+                &lv_font_montserrat_24, &lv_font_montserrat_20, &lv_font_montserrat_14};
+    return {&lv_font_montserrat_12, &lv_font_montserrat_14, &lv_font_montserrat_16, &lv_font_montserrat_14,
+            &lv_font_montserrat_20, &lv_font_montserrat_16, &lv_font_montserrat_12};
+}
+
+int32_t lh(const lv_font_t *f) { return lv_font_get_line_height(f); }
+
+// Geometry, filled once by computeLayout(). At 320x240 it reproduces the
+// original fixed layout (bar 20, footer 16, 16 px health rows, 31 px feed
+// steps, 20 px activity rows).
+struct Layout {
+    int32_t barH, footH, pageH;
+    int32_t rowH;                     // health page
+    int32_t feedStep, feedHeadH;      // message feed
+    int32_t actStep;                  // activity
+    int     chanCols, chanRows, feedRows, actRows;
+} L;
+
+int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+void computeLayout() {
+    const Fonts F = fonts();
+    L.barH = lh(F.title) + (kTier == 0 ? 4 : 8);
+    L.footH = lh(F.small) + (kTier == 0 ? 1 : 4);
+    L.pageH = kH - L.barH - L.footH;
+    L.rowH = lh(F.small) + 1;
+    L.feedHeadH = lh(F.small);
+    L.feedStep = lh(F.small) + lh(F.body) + (kTier == 0 ? 0 : 4);
+    L.actStep = lh(F.body) + (kTier == 0 ? 4 : 6);
+    L.chanCols = kW >= 600 ? 3 : 2;
+    // Health page: 4 rows above the channel block, 2 below.
+    const int chanRows = (int)((L.pageH - 3) / L.rowH) - 6;
+    L.chanRows = clampi(chanRows, 1, kMaxChanSlots / L.chanCols);
+    L.feedRows = clampi((int)((L.pageH - 3) / L.feedStep), 1, kMaxFeedRows);
+    L.actRows = clampi((int)((L.pageH - 1) / L.actStep), 1, kMaxActRows);
+}
 
 // camillia-mt's "Camillia Dark" theme preset (kUiThemePresets[0]) and splash text colours.
 constexpr uint16_t kBgMain = 0x0843, kPanelBg = 0x1065, kPanelAlt = 0x18A7, kAccent = 0xDA8E;
@@ -44,9 +105,9 @@ lv_obj_t *s_footId = nullptr, *s_footIp = nullptr;
 lv_obj_t *s_dots[3];
 lv_obj_t *s_page[3];
 lv_obj_t *s_p1[6];                       // page 1 single rows
-lv_obj_t *s_p1Chan[kChanRows * 2];       // page 1 store rows, two columns
-lv_obj_t *s_msgHead[kFeedRows], *s_msgText[kFeedRows], *s_msgEmpty = nullptr;
-lv_obj_t *s_act[kActRows], *s_actEmpty = nullptr;
+lv_obj_t *s_p1Chan[kMaxChanSlots];       // page 1 store rows, in columns
+lv_obj_t *s_msgHead[kMaxFeedRows], *s_msgText[kMaxFeedRows], *s_msgEmpty = nullptr;
+lv_obj_t *s_act[kMaxActRows], *s_actEmpty = nullptr;
 
 PageCycler s_cycler;
 bool       s_started = false;    // splash over, cycler running
@@ -54,9 +115,9 @@ int        s_shownPage = -1;
 uint8_t    s_blLevel = TFT_BRIGHTNESS_DEFAULT;
 uint32_t   s_lastFillMs = 0;
 
-StoredMsg     s_msgs[kFeedRows];
-int8_t        s_msgSlots[kFeedRows];
-ActivityEntry s_acts[kActRows];
+StoredMsg     s_msgs[kMaxFeedRows];
+int8_t        s_msgSlots[kMaxFeedRows];
+ActivityEntry s_acts[kMaxActRows];
 
 // ── Colour helpers (blend565 is camillia-mt's) ───────────────────────────────
 constexpr uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
@@ -158,9 +219,10 @@ void px(lv_draw_buf_t *b, int x, int y, uint16_t c) {
     ((uint16_t *)(b->data + (size_t)y * b->header.stride))[x] = c;
 }
 
-// Disc (fill) or one-pixel ring (edge), close to LovyanGFX fillCircle/drawCircle.
+// Disc (fill) or ring (edge), close to LovyanGFX fillCircle/drawCircle. The
+// ring is kFlowerScale px wide so the outline keeps its weight when scaled.
 void circle(lv_draw_buf_t *b, int cx, int cy, int r, uint16_t c, bool ringOnly) {
-    const int outer = r * r + r, inner = r * r - r;
+    const int outer = r * r + r, inner = (r - kFlowerScale + 1) * (r - kFlowerScale + 1) - (r - kFlowerScale + 1);
     for (int dy = -r; dy <= r; dy++)
         for (int dx = -r; dx <= r; dx++) {
             const int d = dx * dx + dy * dy;
@@ -168,17 +230,18 @@ void circle(lv_draw_buf_t *b, int cx, int cy, int r, uint16_t c, bool ringOnly) 
         }
 }
 
-// drawCamelliaMark at scale 1 (camillia-mt's flowerScale for this board), alpha 255.
+// drawCamelliaMark at scale kFlowerScale (camillia-mt's flowerScale), alpha 255.
 void drawCamellia(lv_draw_buf_t *b, int cx, int cy) {
+    constexpr int k = kFlowerScale;
     const uint16_t PETAL_OUTER = 0xF9CF, PETAL_MID = 0xFADF, PETAL_INNER = 0xFF7D;
     const uint16_t PETAL_EDGE = 0xD8A7, CENTER = 0xFD20, CENTER_DOT = 0xFEA0;
     const uint16_t STEM = 0x64EC, LEAF_DARK = 0x2C87, LEAF_LIGHT = 0x3D68;
     auto ring = [&](int n, float phase, int ox, int oy, int r0, int r1, uint16_t col, bool edge) {
         for (int i = 0; i < n; i++) {
             const float a = ((float)i * 2.0f * (float)M_PI / (float)n) + phase;
-            const int x = cx + (int)lroundf((float)ox * cosf(a));
-            const int y = cy + (int)lroundf((float)oy * sinf(a));
-            const int r = (i & 1) ? r1 : r0;
+            const int x = cx + (int)lroundf((float)(ox * k) * cosf(a));
+            const int y = cy + (int)lroundf((float)(oy * k) * sinf(a));
+            const int r = ((i & 1) ? r1 : r0) * k;
             circle(b, x, y, r, col, false);
             if (edge) circle(b, x, y, r, PETAL_EDGE, true);
         }
@@ -186,19 +249,20 @@ void drawCamellia(lv_draw_buf_t *b, int cx, int cy) {
     ring(10, 0.16f, 23, 18, 11, 12, PETAL_OUTER, true);
     ring(8, 0.42f, 13, 10, 9, 9, PETAL_MID, true);
     ring(5, 0.20f, 6, 5, 6, 6, PETAL_INNER, false);
-    circle(b, cx, cy, 6, CENTER, false);
-    circle(b, cx, cy, 6, 0xD4C0, true);
+    circle(b, cx, cy, 6 * k, CENTER, false);
+    circle(b, cx, cy, 6 * k, 0xD4C0, true);
     for (int i = 0; i < 10; i++) {
         const float a = (float)i * 2.0f * (float)M_PI / 10.0f;
-        circle(b, cx + (int)lroundf(4.0f * cosf(a)), cy + (int)lroundf(4.0f * sinf(a)), 1, CENTER_DOT, false);
+        circle(b, cx + (int)lroundf(4.0f * k * cosf(a)), cy + (int)lroundf(4.0f * k * sinf(a)), k, CENTER_DOT,
+               false);
     }
-    for (int y = 0; y < 17; y++)                    // stem: 3x17 round rect, radius 1
-        for (int x = 0; x < 3; x++)
-            if (!((x == 0 || x == 2) && (y == 0 || y == 16))) px(b, cx - 1 + x, cy + 20 + y, STEM);
-    circle(b, cx - 21, cy + 28, 8, LEAF_DARK, false);
-    circle(b, cx - 14, cy + 30, 6, LEAF_LIGHT, false);
-    circle(b, cx + 21, cy + 29, 8, LEAF_DARK, false);
-    circle(b, cx + 14, cy + 31, 6, LEAF_LIGHT, false);
+    for (int y = 0; y < 17 * k; y++)                // stem: 3x17 round rect, radius 1 (scaled)
+        for (int x = 0; x < 3 * k; x++)
+            if (!((x < k || x >= 2 * k) && (y < k || y >= 16 * k))) px(b, cx - k + x, cy + 20 * k + y, STEM);
+    circle(b, cx - 21 * k, cy + 28 * k, 8 * k, LEAF_DARK, false);
+    circle(b, cx - 14 * k, cy + 30 * k, 6 * k, LEAF_LIGHT, false);
+    circle(b, cx + 21 * k, cy + 29 * k, 8 * k, LEAF_DARK, false);
+    circle(b, cx + 14 * k, cy + 31 * k, 6 * k, LEAF_LIGHT, false);
 }
 
 void buildSplash() {
@@ -227,23 +291,25 @@ void buildSplash() {
     lv_obj_set_style_border_width(edge, 1, 0);
     lv_obj_set_style_border_color(edge, c565(cardEdgeHi), 0);
 
-    lv_obj_align(mkText(s_splash, &lv_font_montserrat_20, lv_color_hex(kTextMain), "Camillia"),
-                 LV_ALIGN_TOP_MID, 0, 22);
-    lv_obj_align(mkText(s_splash, &lv_font_montserrat_16, lv_color_hex(kTextMain), "Chat Server"),
-                 LV_ALIGN_TOP_MID, 0, 44);
-    lv_obj_align(mkText(s_splash, &lv_font_montserrat_12, c565(dimCol), "v" CS_VERSION),
-                 LV_ALIGN_TOP_MID, 0, 64);
+    // Title block from y 22 (y 22 / 44 / 64 at tier 0).
+    const Fonts F = fonts();
+    const int32_t y1 = 22, y2 = y1 + lh(F.splash1) + 2, y3 = y2 + lh(F.splash2) + 2;
+    const int32_t titleEnd = y3 + lh(F.splash3) + 2;
+    lv_obj_align(mkText(s_splash, F.splash1, lv_color_hex(kTextMain), "Camillia"), LV_ALIGN_TOP_MID, 0, y1);
+    lv_obj_align(mkText(s_splash, F.splash2, lv_color_hex(kTextMain), "Chat Server"), LV_ALIGN_TOP_MID, 0, y2);
+    lv_obj_align(mkText(s_splash, F.splash3, c565(dimCol), "v" CS_VERSION), LV_ALIGN_TOP_MID, 0, y3);
 
-    // Flower centred between the title block (~y 81) and cardY + cardH - 40,
-    // as in drawBootSplash. 80x76 canvas, mark centre at (40, 32).
-    s_splashBuf = lv_draw_buf_create(80, 76, LV_COLOR_FORMAT_RGB565, LV_STRIDE_AUTO);
+    // Flower centred between the title block and cardY + cardH - 40, as in
+    // drawBootSplash. 80x76 canvas per scale step, mark centre at (40, 32).
+    constexpr int k = kFlowerScale;
+    s_splashBuf = lv_draw_buf_create(80 * k, 76 * k, LV_COLOR_FORMAT_RGB565, LV_STRIDE_AUTO);
     if (!s_splashBuf) return;   // splash without the flower
     lv_obj_t *canvas = lv_canvas_create(s_splash);
     lv_obj_remove_flag(canvas, LV_OBJ_FLAG_CLICKABLE);
     lv_canvas_set_draw_buf(canvas, s_splashBuf);
     lv_canvas_fill_bg(canvas, c565(kPanelBg), LV_OPA_COVER);
-    drawCamellia(s_splashBuf, 40, 32);
-    lv_obj_set_pos(canvas, kW / 2 - 40, (81 + (kH - 10 - 40)) / 2 - 32);
+    drawCamellia(s_splashBuf, 40 * k, 32 * k);
+    lv_obj_set_pos(canvas, kW / 2 - 40 * k, (titleEnd + (kH - 10 - 40)) / 2 - 32 * k);
     lv_obj_invalidate(canvas);
 }
 
@@ -265,16 +331,22 @@ void buildMain() {
     lv_obj_set_style_bg_opa(s_main, LV_OPA_COVER, 0);
     lv_obj_add_event_cb(s_main, onTap, LV_EVENT_CLICKED, nullptr);
 
+    const Fonts F = fonts();
+    const int32_t m = kMargin, rowW = kW - 2 * m;
+
     // Status bar: title left; clock + battery, then three page dots, right.
-    lv_obj_t *bar = mkBox(s_main, 0, 0, kW, kBarH);
+    const int32_t dot = kTier == 0 ? 6 : kTier == 1 ? 8 : 12, dotGap = dot + dot / 2;
+    const int32_t dotsW = 2 * dotGap + dot + 4;
+    lv_obj_t *bar = mkBox(s_main, 0, 0, kW, L.barH);
     lv_obj_set_style_bg_color(bar, c565(kPanelBg), 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
-    lv_obj_t *title = mkRow(bar, &lv_font_montserrat_14, text, 4, 2, 170);
+    lv_obj_t *title = mkRow(bar, F.title, text, m - 2, (L.barH - lh(F.title)) / 2, kW * 17 / 32);
     lv_label_set_text(title, "Camillia Chat Server");
-    s_barRight = mkRow(bar, &lv_font_montserrat_12, text, 176, 3, 110);
+    const int32_t rightX = kW * 17 / 32 + 6;
+    s_barRight = mkRow(bar, F.small, text, rightX, (L.barH - lh(F.small)) / 2, kW - rightX - dotsW - 6);
     lv_obj_set_style_text_align(s_barRight, LV_TEXT_ALIGN_RIGHT, 0);
     for (int i = 0; i < 3; i++) {
-        s_dots[i] = mkBox(bar, 292 + i * 9, 7, 6, 6);
+        s_dots[i] = mkBox(bar, kW - dotsW + i * dotGap, (L.barH - dot) / 2, dot, dot);
         lv_obj_set_style_radius(s_dots[i], LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_opa(s_dots[i], LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(s_dots[i], dim, 0);
@@ -282,38 +354,40 @@ void buildMain() {
 
     // Footer, on every page: node identity left, IP address right (both shown
     // nowhere else).
-    lv_obj_t *foot = mkBox(s_main, 0, kH - kFootH, kW, kFootH);
+    const int32_t ipW = kW * 3 / 8;
+    lv_obj_t *foot = mkBox(s_main, 0, kH - L.footH, kW, L.footH);
     lv_obj_set_style_bg_color(foot, c565(kPanelBg), 0);
     lv_obj_set_style_bg_opa(foot, LV_OPA_COVER, 0);
-    s_footId = mkRow(foot, &lv_font_montserrat_12, accent, 4, 1, kW - 132);
-    s_footIp = mkRow(foot, &lv_font_montserrat_12, text, kW - 124, 1, 120);
+    s_footId = mkRow(foot, F.small, accent, m - 2, (L.footH - lh(F.small)) / 2, kW - ipW - 2 * m);
+    s_footIp = mkRow(foot, F.small, text, kW - ipW - m + 2, (L.footH - lh(F.small)) / 2, ipW);
     lv_obj_set_style_text_align(s_footIp, LV_TEXT_ALIGN_RIGHT, 0);
 
     for (int i = 0; i < 3; i++) {
-        s_page[i] = mkBox(s_main, 0, kBarH, kW, kH - kBarH - kFootH);
+        s_page[i] = mkBox(s_main, 0, L.barH, kW, L.pageH);
         setVisible(s_page[i], false);
     }
 
-    // Page 1: health. 11 rows of 16 px; rows 4-8 are the store, two columns.
-    const lv_font_t *f12 = &lv_font_montserrat_12;
-    auto rowY = [](int row) { return (int32_t)(3 + row * 16); };
-    for (int i = 0; i < 4; i++) s_p1[i] = mkRow(s_page[0], f12, text, 6, rowY(i), 308);
-    for (int i = 0; i < kChanRows * 2; i++)
-        s_p1Chan[i] = mkRow(s_page[0], f12, dim, (i % 2) ? 163 : 6, rowY(4 + i / 2), 151);
-    s_p1[4] = mkRow(s_page[0], f12, text, 6, rowY(9), 308);
-    s_p1[5] = mkRow(s_page[0], f12, text, 6, rowY(10), 308);
+    // Page 1: health. Four rows, the store block (chanRows x chanCols), two rows.
+    auto rowY = [](int row) { return (int32_t)(3 + row * L.rowH); };
+    for (int i = 0; i < 4; i++) s_p1[i] = mkRow(s_page[0], F.small, text, m, rowY(i), rowW);
+    const int32_t colGap = m, colW = (rowW - colGap * (L.chanCols - 1)) / L.chanCols;
+    for (int i = 0; i < L.chanRows * L.chanCols; i++)
+        s_p1Chan[i] = mkRow(s_page[0], F.small, dim, m + (i % L.chanCols) * (colW + colGap),
+                            rowY(4 + i / L.chanCols), colW);
+    s_p1[4] = mkRow(s_page[0], F.small, text, m, rowY(4 + L.chanRows), rowW);
+    s_p1[5] = mkRow(s_page[0], F.small, text, m, rowY(5 + L.chanRows), rowW);
 
-    // Page 2: message feed, two lines per message (15 + 16 px).
-    for (int i = 0; i < kFeedRows; i++) {
-        s_msgHead[i] = mkRow(s_page[1], f12, accent, 6, 3 + i * 31, 308);
-        s_msgText[i] = mkRow(s_page[1], &lv_font_montserrat_14, text, 6, 3 + i * 31 + 15, 308);
+    // Page 2: message feed, two lines per message.
+    for (int i = 0; i < L.feedRows; i++) {
+        s_msgHead[i] = mkRow(s_page[1], F.small, accent, m, 3 + i * L.feedStep, rowW);
+        s_msgText[i] = mkRow(s_page[1], F.body, text, m, 3 + i * L.feedStep + L.feedHeadH, rowW);
     }
-    s_msgEmpty = mkText(s_page[1], &lv_font_montserrat_16, dim, "No messages yet");
+    s_msgEmpty = mkText(s_page[1], F.big, dim, "No messages yet");
     lv_obj_align(s_msgEmpty, LV_ALIGN_CENTER, 0, 0);
 
-    // Page 3: sync activity, 20 px rows.
-    for (int i = 0; i < kActRows; i++) s_act[i] = mkRow(s_page[2], &lv_font_montserrat_14, text, 6, 1 + i * 20, 308);
-    s_actEmpty = mkText(s_page[2], &lv_font_montserrat_16, dim, "No sync activity yet");
+    // Page 3: sync activity.
+    for (int i = 0; i < L.actRows; i++) s_act[i] = mkRow(s_page[2], F.body, text, m, 1 + i * L.actStep, rowW);
+    s_actEmpty = mkText(s_page[2], F.big, dim, "No sync activity yet");
     lv_obj_align(s_actEmpty, LV_ALIGN_CENTER, 0, 0);
 }
 
@@ -381,9 +455,9 @@ void fillHealth(const DisplayStatus &st) {
     if (st.dutyLimitPct >= 100) snprintf(buf, sizeof buf, "Airtime (1 h) %.1f%% / none", st.airtimePct);
     else snprintf(buf, sizeof buf, "Airtime (1 h) %.1f%% / %u%%", st.airtimePct, (unsigned)st.dutyLimitPct);
     setText(s_p1[3], buf);
-    // Up to 10 channels in store order. Beyond that, the 9 busiest and a "+N more"
-    // line for the rest.
-    constexpr int kSlots = kChanRows * 2;
+    // As many channels as the store block holds, in store order. Beyond that,
+    // the busiest that fit and a "+N more" line for the rest.
+    const int kSlots = L.chanRows * L.chanCols;
     const bool overflow = st.chanCount > kSlots;
     const int shown = overflow ? kSlots - 1 : st.chanCount;
     int order[CS_MAX_CHANNELS];
@@ -420,10 +494,10 @@ void fillHealth(const DisplayStatus &st) {
 }
 
 void fillFeed(const DisplayStatus &st) {
-    const int n = st.newestMessages ? st.newestMessages(s_msgs, s_msgSlots, kFeedRows) : 0;
+    const int n = st.newestMessages ? st.newestMessages(s_msgs, s_msgSlots, L.feedRows) : 0;
     const uint32_t nowUnix = st.clockSet ? (uint32_t)time(nullptr) : 0;
     char head[96], name[32], age[8], text[CS_MAX_TEXT + 8];
-    for (int i = 0; i < kFeedRows; i++) {
+    for (int i = 0; i < L.feedRows; i++) {
         setVisible(s_msgHead[i], i < n);
         setVisible(s_msgText[i], i < n);
         if (i >= n) continue;
@@ -443,9 +517,9 @@ void fillFeed(const DisplayStatus &st) {
 }
 
 void fillActivity(const DisplayStatus &st) {
-    const int n = st.newestActivity ? st.newestActivity(s_acts, kActRows) : 0;
+    const int n = st.newestActivity ? st.newestActivity(s_acts, L.actRows) : 0;
     char line[128], name[32], age[8], detail[80];
-    for (int i = 0; i < kActRows; i++) {
+    for (int i = 0; i < L.actRows; i++) {
         setVisible(s_act[i], i < n);
         if (i >= n) continue;
         const ActivityEntry &e = s_acts[i];
@@ -494,6 +568,7 @@ void displayBegin() {
         Serial.printf("[cs] display: no LVGL input device; touch off\n");
     }
 
+    computeLayout();
     buildMain();
     buildSplash();
     lv_screen_load(s_splash);

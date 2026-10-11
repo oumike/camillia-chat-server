@@ -1,7 +1,8 @@
 #pragma once
 // Display hardware under status_display_lvgl.cpp: panel, backlight, touch and
 // the Wake button. One implementation per TFT board, chosen by build_src_filter
-// in platformio.ini: display_hal_heltec_exp.cpp, display_hal_wio_l2.cpp.
+// in platformio.ini: display_hal_heltec_exp.cpp, display_hal_wio_l2.cpp, and
+// src/boards/<name>/ for the envs/*.ini boards.
 #include <stddef.h>
 #include <stdint.h>
 
