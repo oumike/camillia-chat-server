@@ -19,7 +19,7 @@ namespace {
 
 // Hard-coded so the update source can't be repointed from the web config. Plain
 // HTTP (as in camillia-mt): authenticity comes from the signature, not transport.
-const char kBaseUrl[] = "http://ota.camillia.sumat.org/chat-server";
+const char kBaseUrl[] = "http://ota.camillia.sumat.org/cs-firmware";
 const char kUserAgent[] = "camillia-chat-server-ota";
 constexpr uint32_t kHttpTimeoutMs = 12000;
 constexpr uint32_t kStallMs = 15000;

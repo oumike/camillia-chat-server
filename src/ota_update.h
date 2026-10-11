@@ -1,9 +1,9 @@
 #pragma once
 // Over-the-air updates, ported from camillia-mt's ota_update.cpp (stable channel
 // only). Releases come from the camillia OTA proxy over plain HTTP:
-//   GET  http://ota.camillia.sumat.org/chat-server/latest            GitHub release JSON (tag_name)
-//   GET  .../chat-server/<tag>/camillia-chat-server-<env>-<tag>-ota.bin      app image
-//   GET  .../chat-server/<tag>/camillia-chat-server-<env>-<tag>-ota.bin.sig  DER ECDSA P-256 over SHA-256
+//   GET  http://ota.camillia.sumat.org/cs-firmware/latest            GitHub release JSON (tag_name)
+//   GET  .../cs-firmware/<tag>/camillia-chat-server-<env>-<tag>-ota.bin      app image
+//   GET  .../cs-firmware/<tag>/camillia-chat-server-<env>-<tag>-ota.bin.sig  DER ECDSA P-256 over SHA-256
 // The image streams into the idle OTA slot and is only committed after its
 // signature verifies against the baked-in public key (ota_signing_pubkey.h).
 //

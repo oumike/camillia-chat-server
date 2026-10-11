@@ -26,7 +26,7 @@ point comes back.
 ## OTA updates
 
 The **Firmware** card in the web config checks for and installs new stable
-releases, from `http://ota.camillia.sumat.org/chat-server` (a proxy for this
+releases, from `http://ota.camillia.sumat.org/cs-firmware` (a proxy for this
 repo's GitHub releases). The device checks 20 seconds after joining WiFi and
 then once a day. With **Install updates automatically** on (`ota.autoInstall`
 in the YAML backup), it installs a newer release itself and restarts.

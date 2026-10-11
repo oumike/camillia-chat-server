@@ -223,7 +223,7 @@ Off by default. When on, the server subscribes under the configured topic root f
 
 ### 5.8 OTA updates
 
-Same scheme as camillia-mt. Pull-only over plain HTTP from the proxy `http://ota.camillia.sumat.org/chat-server`: `GET /latest` returns the latest GitHub release JSON for this repo, and `GET /<tag>/<asset>` serves its assets. Only stable releases newer than the running version are offered; dev builds never auto-install.
+Same scheme as camillia-mt. Pull-only over plain HTTP from the proxy `http://ota.camillia.sumat.org/cs-firmware`: `GET /latest` returns the latest GitHub release JSON for this repo, and `GET /<tag>/<asset>` serves its assets. Only stable releases newer than the running version are offered; dev builds never auto-install.
 
 Each release ships `camillia-chat-server-<env>-<tag>-ota.bin` (the app image) and `<that>.sig`, a DER ECDSA P-256 signature over the image's SHA-256, made with the same key as camillia-mt. The device fetches the signature, streams the image into the inactive OTA slot while hashing it, and verifies the signature against `src/ota_signing_pubkey.h` before it marks the slot bootable. Any failure leaves the running image untouched.
 
