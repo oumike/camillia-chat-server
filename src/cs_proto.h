@@ -19,6 +19,9 @@ constexpr uint32_t AGE_UNKNOWN     = 0xFFFFFFFF;
 constexpr size_t   MAX_PAYLOAD     = 231;
 constexpr size_t   MAX_TEXT        = 200;
 constexpr int      MAX_ANNOUNCE_CHANNELS    = 10;   // 10 x (4+1+11) + 9 = 169 bytes max
+// A client lists its own channel IDs in DISCOVER (2 + 1 + 10 x 4 = 43 bytes), so a
+// server holding more than MAX_ANNOUNCE_CHANNELS can announce just the shared ones.
+constexpr int      MAX_DISCOVER_CHANNELS    = 10;
 constexpr size_t   ITEM_OVERHEAD   = 17;   // seq, from, packetId, age, textLen
 constexpr size_t   BATCH_HEADER    = 12;   // version, type, epoch, flags, time, count
 
@@ -42,7 +45,11 @@ size_t itemWireSize(const Item &it);
 
 // Encoders return the encoded length, or 0 if the buffer is too small.
 // Decoders return false on a wrong version/type or malformed input.
-size_t encodeDiscover(uint8_t *buf, size_t cap);
+// ids/n: the client's channel IDs (at most MAX_DISCOVER_CHANNELS). n == 0 encodes
+// the original 2-byte DISCOVER; older servers ignore anything after the type.
+size_t encodeDiscover(uint8_t *buf, size_t cap, const uint32_t *ids = nullptr, uint8_t n = 0);
+// hasList is false for a 2-byte DISCOVER from a client that predates the list.
+bool   decodeDiscover(const uint8_t *buf, size_t len, uint32_t *ids, uint8_t &n, bool &hasList);
 size_t encodeAnnounce(const Announce &a, uint8_t *buf, size_t cap);
 bool   decodeAnnounce(const uint8_t *buf, size_t len, Announce &out);
 size_t encodeRequest(const Request &r, uint8_t *buf, size_t cap);

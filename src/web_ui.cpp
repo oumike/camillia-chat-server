@@ -202,7 +202,7 @@ $('ch').onchange=load;$('refresh').onclick=load;
 $('clear1').onclick=()=>$('ch').value!==''&&clr($('ch').value,'#'+$('ch').selectedOptions[0].text);
 $('clearAll').onclick=()=>clr('all','every channel');
 // Channel editor
-const MAXC=10,cc=document.querySelector('[name=chanCount]'),rowsEl=[...document.querySelectorAll('.chan')];
+const cc=document.querySelector('[name=chanCount]'),rowsEl=[...document.querySelectorAll('.chan')],MAXC=rowsEl.length;
 function keyLen(v){v=v.trim().replace(/=+$/,'');if(!v)return 0;if(!/^[A-Za-z0-9+/]+$/.test(v))return-1;return Math.floor(v.length*6/8)}
 function keyInfo(r){const k=r.querySelector('.key'),t=r.querySelector('.keyinfo'),n=keyLen(k.value);
 const [cls,txt]=n==0?['warn','No encryption']:n==1?['ok','Default Meshtastic key']:n==16?['ok','AES-128']:n==32?['ok','AES-256']:['bad','Not a valid key'];

@@ -381,10 +381,28 @@ void fillHealth(const DisplayStatus &st) {
     if (st.dutyLimitPct >= 100) snprintf(buf, sizeof buf, "Airtime (1 h) %.1f%% / none", st.airtimePct);
     else snprintf(buf, sizeof buf, "Airtime (1 h) %.1f%% / %u%%", st.airtimePct, (unsigned)st.dutyLimitPct);
     setText(s_p1[3], buf);
-    for (int i = 0; i < kChanRows * 2; i++) {
-        if (i < st.chanCount) {
-            const char *n = chanOf(st, i);
-            snprintf(buf, sizeof buf, "#%s  %d/%d", n && n[0] ? n : "?", st.chanCounts[i], CS_MSGS_PER_CHANNEL);
+    // Up to 10 channels in store order. Beyond that, the 9 busiest and a "+N more"
+    // line for the rest.
+    constexpr int kSlots = kChanRows * 2;
+    const bool overflow = st.chanCount > kSlots;
+    const int shown = overflow ? kSlots - 1 : st.chanCount;
+    int order[CS_MAX_CHANNELS];
+    for (int i = 0; i < st.chanCount; i++) order[i] = i;
+    if (overflow) {
+        for (int i = 1; i < st.chanCount; i++)
+            for (int j = i; j > 0 && st.chanCounts[order[j]] > st.chanCounts[order[j - 1]]; j--) {
+                int t = order[j]; order[j] = order[j - 1]; order[j - 1] = t;
+            }
+    }
+    for (int i = 0; i < kSlots; i++) {
+        if (i < shown) {
+            const char *n = chanOf(st, order[i]);
+            snprintf(buf, sizeof buf, "#%s  %d/%d", n && n[0] ? n : "?", st.chanCounts[order[i]],
+                     CS_MSGS_PER_CHANNEL);
+        } else if (overflow && i == shown) {
+            int rest = 0;
+            for (int k = shown; k < st.chanCount; k++) rest += st.chanCounts[order[k]];
+            snprintf(buf, sizeof buf, "+%d more  %d msgs", st.chanCount - shown, rest);
         } else {
             snprintf(buf, sizeof buf, "%s", i == 0 ? "No channels configured" : "");
         }

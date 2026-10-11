@@ -80,7 +80,12 @@ public:
 
 private:
     struct Pending { uint32_t from; int slot; uint8_t hops; csp::Request req; };
-    struct AnnounceTo { uint32_t to; uint8_t hops; };
+    // hasList: the DISCOVER named the client's channels, so only shared ones are announced.
+    struct AnnounceTo {
+        uint32_t to; uint8_t hops; bool hasList; uint8_t n;
+        uint32_t ids[csp::MAX_DISCOVER_CHANNELS];
+    };
+    void buildAnnounce(const AnnounceTo &a, csp::Announce &out) const;
 
     void startNext(uint32_t nowUnix, bool timeValid, uint32_t nowUptimeSec);
     bool seenRecently(uint32_t from, uint32_t packetId, uint32_t nowMs);
@@ -92,7 +97,9 @@ private:
 
     ServerConfig  _cfg;
     ChannelStore *_stores = nullptr;
-    csp::Announce _announce{};
+    char          _shortName[5] = "";
+    uint32_t      _chanIds[CS_MAX_CHANNELS] = {};
+    char          _chanNames[CS_MAX_CHANNELS][12] = {};
     int           _chanCount = 0;
 
     Pending    _q[CS_QUEUE_CAP];

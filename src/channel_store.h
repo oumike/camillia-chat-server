@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-constexpr int CS_MAX_CHANNELS     = 10;
+constexpr int CS_MAX_CHANNELS     = 20;
 constexpr int CS_MSGS_PER_CHANNEL = 250;
 constexpr int CS_MAX_TEXT         = 200;
 

@@ -185,7 +185,9 @@ bool isNewer(const StoredMsg &a, const StoredMsg &b) {
 
 int newestAcross(const ChannelStore *stores, int count, StoredMsg *out, int8_t *slots, int max) {
     if (count > CS_MAX_CHANNELS) count = CS_MAX_CHANNELS;
-    StoredMsg heads[CS_MAX_CHANNELS];
+    // Static: 20 heads are ~4.5 KB, too much for the loop task's stack. Only
+    // the main loop calls this.
+    static StoredMsg heads[CS_MAX_CHANNELS];
     bool live[CS_MAX_CHANNELS];
     for (int i = 0; i < count; i++) {
         live[i] = stores[i].count() > 0 && stores[i].copyBefore(0xFFFFFFFFu, &heads[i]);

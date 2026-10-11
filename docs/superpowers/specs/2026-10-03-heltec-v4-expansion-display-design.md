@@ -165,7 +165,7 @@ public:
 | Node | region and preset (the name and ID are in the footer) |
 | Network | MQTT state and received/decrypted counts (the IP is in the footer) |
 | Radio | last RX `12s ago  -97 dBm  6.5 dB` (or `none yet`), airtime in the last hour against the limit, e.g. `0.8% / 10%` (`/ none` when the limit is 100%) |
-| Store | per channel `name  count/250`, up to 10 rows in two columns; flash used/total KB; free PSRAM KB |
+| Store | per channel `name  count/250`, up to 10 rows in two columns (past 10 channels: the 9 busiest plus a `+N more  M msgs` row); flash used/total KB; free PSRAM KB |
 | System | uptime `3d 4h`, `clock set` or `clock not set`, battery `3.92 V 78%` (or `USB`) |
 
 **Page 2: Message feed.** The newest 6 stored messages across all channels, newest first, ordered by receive time (unix when set, otherwise uptime this boot; messages loaded from a previous boot come after messages heard this boot). Each message takes two lines:

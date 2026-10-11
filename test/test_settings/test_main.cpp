@@ -40,11 +40,11 @@ void test_validate_rejects_out_of_range() {
     settingsDefaults(s, 1); s.packetGapMs = 499; TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
     settingsDefaults(s, 1); s.maxHops = 8;      TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
     settingsDefaults(s, 1); s.chanCount = 0;    TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
-    settingsDefaults(s, 1); s.chanCount = 11;   TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
+    settingsDefaults(s, 1); s.chanCount = 21;   TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
     settingsDefaults(s, 1);
-    s.chanCount = 10;
-    for (int i = 1; i < 10; i++) { snprintf(s.ch[i].name, sizeof s.ch[i].name, "ch%d", i); s.ch[i].keyLen = 1; s.ch[i].key[0] = 1; }
-    TEST_ASSERT_TRUE_MESSAGE(settingsValidate(s, err, sizeof err), err);   // 10 channels allowed
+    s.chanCount = 20;
+    for (int i = 1; i < 20; i++) { snprintf(s.ch[i].name, sizeof s.ch[i].name, "ch%d", i); s.ch[i].keyLen = 1; s.ch[i].key[0] = 1; }
+    TEST_ASSERT_TRUE_MESSAGE(settingsValidate(s, err, sizeof err), err);   // 20 channels allowed
     settingsDefaults(s, 1); s.shortName[0] = 0; TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
 }
 
@@ -124,36 +124,75 @@ void test_display_ranges() {
     TEST_ASSERT_TRUE(settingsValidate(s, err, sizeof err));
 }
 
+// A blob in the old 10-slot layout, with every field after the channels set.
+static void oldBlob(SettingsV6 &o) {
+    memset(&o, 0, sizeof o);
+    strcpy(o.shortName, "OLD"); strcpy(o.longName, "Old"); strcpy(o.region, "EU_868");
+    o.modemPreset = 4; o.chanCount = 10;
+    for (int i = 0; i < 10; i++) {
+        snprintf(o.ch[i].name, sizeof o.ch[i].name, "c%d", i);
+        o.ch[i].keyLen = 1; o.ch[i].key[0] = (uint8_t)(i + 1);
+    }
+    o.batchSize = 12; o.packetGapMs = 4000; o.maxHops = 5; o.mqttEnabled = true;
+    strcpy(o.mqttHost, "broker"); o.mqttPort = 1884; strcpy(o.mqttRoot, "msh/EU");
+    strcpy(o.staSsid, "Home"); strcpy(o.tz, "UTC0");
+    o.displayBrightness = 99; o.displayDimAfterSec = 60; o.displayDimLevel = 7; o.displayPageSec = 45;
+    o.otaAutoInstall = true;
+}
+
+static void assertOldCarried(const Settings &s) {
+    TEST_ASSERT_EQUAL_STRING("Old", s.longName);
+    TEST_ASSERT_EQUAL_STRING("EU_868", s.region);
+    TEST_ASSERT_EQUAL(4, s.modemPreset);
+    TEST_ASSERT_EQUAL(10, s.chanCount);
+    TEST_ASSERT_EQUAL_STRING("c9", s.ch[9].name);
+    TEST_ASSERT_EQUAL(10, s.ch[9].key[0]);
+    TEST_ASSERT_EQUAL_STRING("", s.ch[10].name);
+    TEST_ASSERT_EQUAL(12, s.batchSize);
+    TEST_ASSERT_EQUAL(4000, s.packetGapMs);
+    TEST_ASSERT_EQUAL(5, s.maxHops);
+    TEST_ASSERT_TRUE(s.mqttEnabled);
+    TEST_ASSERT_EQUAL_STRING("broker", s.mqttHost);
+    TEST_ASSERT_EQUAL(1884, s.mqttPort);
+    TEST_ASSERT_EQUAL_STRING("Home", s.staSsid);
+    TEST_ASSERT_EQUAL_STRING("UTC0", s.tz);
+}
+
 void test_upgrade_v4_blob() {
-    Settings old;
-    settingsDefaults(old, 1);
-    strcpy(old.longName, "Old");
-    old.chanCount = 2;
-    const size_t len = SETTINGS_V4_BLOB_LEN;
-    uint8_t blob[sizeof(Settings)];
-    memcpy(blob, &old, sizeof blob);
-    blob[offsetof(Settings, displayBrightness)] = 0xEE;   // stale tail padding in a real v4 blob
+    SettingsV6 o;
+    oldBlob(o);
     Settings s;
     memset(&s, 0xEE, sizeof s);
-    TEST_ASSERT_TRUE(settingsFromBlob(blob, len, 4, s));
-    TEST_ASSERT_EQUAL_STRING("Old", s.longName);
-    TEST_ASSERT_EQUAL(2, s.chanCount);
-    TEST_ASSERT_EQUAL(160, s.displayBrightness);
+    TEST_ASSERT_TRUE(settingsFromBlob((const uint8_t *)&o, SETTINGS_V4_BLOB_LEN, 4, s));
+    assertOldCarried(s);
+    TEST_ASSERT_EQUAL(160, s.displayBrightness);   // v4 predates these: defaults
     TEST_ASSERT_EQUAL(30, s.displayPageSec);
+    TEST_ASSERT_FALSE(s.otaAutoInstall);
 }
 
 void test_upgrade_v5_blob() {
-    Settings old;
-    settingsDefaults(old, 1);
-    old.displayPageSec = 99;
-    uint8_t blob[sizeof(Settings)];
-    memcpy(blob, &old, sizeof blob);
-    blob[offsetof(Settings, otaAutoInstall)] = 0xEE;   // stale tail padding in a real v5 blob
+    SettingsV6 o;
+    oldBlob(o);
     Settings s;
     memset(&s, 0xEE, sizeof s);
-    TEST_ASSERT_TRUE(settingsFromBlob(blob, SETTINGS_V5_BLOB_LEN, 5, s));
-    TEST_ASSERT_EQUAL(99, s.displayPageSec);
+    TEST_ASSERT_TRUE(settingsFromBlob((const uint8_t *)&o, SETTINGS_V5_BLOB_LEN, 5, s));
+    assertOldCarried(s);
+    TEST_ASSERT_EQUAL(99, s.displayBrightness);
+    TEST_ASSERT_EQUAL(45, s.displayPageSec);
     TEST_ASSERT_FALSE(s.otaAutoInstall);
+}
+
+void test_upgrade_v6_blob() {
+    SettingsV6 o;
+    oldBlob(o);
+    Settings s;
+    memset(&s, 0xEE, sizeof s);
+    TEST_ASSERT_TRUE(settingsFromBlob((const uint8_t *)&o, SETTINGS_V6_BLOB_LEN, 6, s));
+    assertOldCarried(s);
+    TEST_ASSERT_EQUAL(60, s.displayDimAfterSec);
+    TEST_ASSERT_EQUAL(7, s.displayDimLevel);
+    TEST_ASSERT_TRUE(s.otaAutoInstall);
+    TEST_ASSERT_FALSE(settingsFromBlob((const uint8_t *)&o, SETTINGS_V6_BLOB_LEN - 1, 6, s));
 }
 
 void test_blob_current_and_bad() {
@@ -165,11 +204,12 @@ void test_blob_current_and_bad() {
     memcpy(blob, &a, sizeof blob);
     a.otaAutoInstall = true;
     memcpy(blob, &a, sizeof blob);
-    TEST_ASSERT_TRUE(settingsFromBlob(blob, sizeof blob, 6, b));
+    TEST_ASSERT_TRUE(settingsFromBlob(blob, sizeof blob, 7, b));
     TEST_ASSERT_EQUAL_STRING("Cur", b.longName);
     TEST_ASSERT_EQUAL(77, b.displayPageSec);
     TEST_ASSERT_TRUE(b.otaAutoInstall);
-    TEST_ASSERT_FALSE(settingsFromBlob(blob, sizeof blob - 1, 6, b));
+    TEST_ASSERT_FALSE(settingsFromBlob(blob, sizeof blob - 1, 7, b));
+    TEST_ASSERT_FALSE(settingsFromBlob(blob, sizeof blob, 6, b));
     TEST_ASSERT_FALSE(settingsFromBlob(blob, sizeof blob, 4, b));
     TEST_ASSERT_FALSE(settingsFromBlob(blob, SETTINGS_V4_BLOB_LEN, 3, b));
 }
@@ -184,6 +224,7 @@ int main() {
     RUN_TEST(test_display_ranges);
     RUN_TEST(test_upgrade_v4_blob);
     RUN_TEST(test_upgrade_v5_blob);
+    RUN_TEST(test_upgrade_v6_blob);
     RUN_TEST(test_blob_current_and_bad);
     return UNITY_END();
 }

@@ -142,6 +142,28 @@ void test_channel_id_stable() {
     TEST_ASSERT_NOT_EQUAL(channelId("LongFast", psk1, 1), channelId("Longfast", psk1, 1));
 }
 
+void test_discover_channel_list() {
+    uint8_t buf[MAX_PAYLOAD];
+    uint32_t ids[MAX_DISCOVER_CHANNELS], got[MAX_DISCOVER_CHANNELS];
+    for (int i = 0; i < MAX_DISCOVER_CHANNELS; i++) ids[i] = 0xA0000000u + (uint32_t)i;
+    size_t n = encodeDiscover(buf, sizeof buf, ids, MAX_DISCOVER_CHANNELS);
+    TEST_ASSERT_EQUAL(2 + 1 + 4 * MAX_DISCOVER_CHANNELS, n);
+    Type t;
+    TEST_ASSERT_TRUE(peekType(buf, n, t));          // what an older server reads
+    TEST_ASSERT_EQUAL(DISCOVER, t);
+    uint8_t cnt = 0; bool has = false;
+    TEST_ASSERT_TRUE(decodeDiscover(buf, n, got, cnt, has));
+    TEST_ASSERT_TRUE(has);
+    TEST_ASSERT_EQUAL(MAX_DISCOVER_CHANNELS, cnt);
+    TEST_ASSERT_EQUAL_HEX32(ids[9], got[9]);
+
+    TEST_ASSERT_TRUE(decodeDiscover(buf, 2, got, cnt, has));   // an older client: no list
+    TEST_ASSERT_FALSE(has);
+    TEST_ASSERT_EQUAL(0, cnt);
+    TEST_ASSERT_FALSE(decodeDiscover(buf, n - 1, got, cnt, has));   // truncated
+    TEST_ASSERT_EQUAL(0, encodeDiscover(buf, sizeof buf, ids, MAX_DISCOVER_CHANNELS + 1));
+}
+
 void test_announce_ten_channels_fits() {
     Announce a{};
     strcpy(a.shortName, "WXYZ");
@@ -168,5 +190,6 @@ int main() {
     RUN_TEST(test_decode_rejects);
     RUN_TEST(test_channel_id_stable);
     RUN_TEST(test_announce_ten_channels_fits);
+    RUN_TEST(test_discover_channel_list);
     return UNITY_END();
 }

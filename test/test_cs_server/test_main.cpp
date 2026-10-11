@@ -201,9 +201,10 @@ struct Rig {
         size_t n = encodeRequest(r, buf, sizeof buf);
         server.onPacket(from, to, pktId ? pktId : s_pktId++, slot, hops, buf, n, nowMs);
     }
-    void discover(uint32_t from, uint8_t hops, uint32_t to = 0xFFFFFFFF, uint32_t pktId = 0) {
-        uint8_t buf[4];
-        size_t n = encodeDiscover(buf, sizeof buf);
+    void discover(uint32_t from, uint8_t hops, uint32_t to = 0xFFFFFFFF, uint32_t pktId = 0,
+                  const uint32_t *ids = nullptr, uint8_t nIds = 0) {
+        uint8_t buf[MAX_PAYLOAD];
+        size_t n = encodeDiscover(buf, sizeof buf, ids, nIds);
         server.onPacket(from, to, pktId ? pktId : s_pktId++, -1, hops, buf, n, 0);
     }
     bool poll(uint32_t nowMs, Outgoing &o) { return server.poll(nowMs, 0, false, nowMs / 1000, o); }
@@ -228,6 +229,67 @@ void test_discover_yields_announce() {
     TEST_ASSERT_EQUAL_HEX32(0x11111111, a.ch[0].id);
     TEST_ASSERT_EQUAL_STRING("camillia", a.ch[1].name);
     TEST_ASSERT_FALSE(rig.poll(10000, o));
+}
+
+void test_discover_list_announces_shared_channels() {
+    Rig rig(0, 5);
+    const uint32_t mine[] = {0x99999999, 0x22222222};
+    rig.discover(0xC0FFEE, 1, 0xFFFFFFFF, 0, mine, 2);
+    Outgoing o;
+    TEST_ASSERT_TRUE(rig.poll(0, o));
+    Announce a;
+    TEST_ASSERT_TRUE(decodeAnnounce(o.payload, o.len, a));
+    TEST_ASSERT_EQUAL(1, a.count);
+    TEST_ASSERT_EQUAL_HEX32(0x22222222, a.ch[0].id);
+    TEST_ASSERT_EQUAL_STRING("camillia", a.ch[0].name);
+}
+
+// 20 channels: a listing client gets its shared ones even past the 10th; an old
+// client (no list) gets the first 10.
+void test_announce_beyond_ten_channels() {
+    ChannelStore *stores = new ChannelStore[CS_MAX_CHANNELS];
+    uint32_t ids[CS_MAX_CHANNELS];
+    char names[CS_MAX_CHANNELS][12];
+    for (int i = 0; i < CS_MAX_CHANNELS; i++) {
+        stores[i].begin(malloc, fakeRandom);
+        ids[i] = 0x1000u + (uint32_t)i;
+        snprintf(names[i], sizeof names[i], "ch%d", i);
+    }
+    ServerConfig cfg;
+    cfg.myNodeId = ME;
+    CsServer *server = new CsServer();
+    server->begin(cfg, stores, ids, names, CS_MAX_CHANNELS);
+
+    uint8_t buf[MAX_PAYLOAD];
+    const uint32_t mine[] = {0x1000u + 15, 0x1000u + 3, 0x1000u + 19};
+    size_t n = encodeDiscover(buf, sizeof buf, mine, 3);
+    server->onPacket(0xA, 0xFFFFFFFF, s_pktId++, -1, 0, buf, n, 0);
+    n = encodeDiscover(buf, sizeof buf);
+    server->onPacket(0xB, 0xFFFFFFFF, s_pktId++, -1, 0, buf, n, 0);
+
+    Outgoing o;
+    Announce a;
+    TEST_ASSERT_TRUE(server->poll(0, 0, false, 0, o));
+    TEST_ASSERT_EQUAL_HEX32(0xA, o.to);
+    TEST_ASSERT_TRUE(decodeAnnounce(o.payload, o.len, a));
+    TEST_ASSERT_EQUAL(3, a.count);
+    TEST_ASSERT_EQUAL_STRING("ch3", a.ch[0].name);
+    TEST_ASSERT_EQUAL_STRING("ch15", a.ch[1].name);
+    TEST_ASSERT_EQUAL_STRING("ch19", a.ch[2].name);
+
+    TEST_ASSERT_TRUE(server->poll(10000, 0, false, 10, o));
+    TEST_ASSERT_EQUAL_HEX32(0xB, o.to);
+    TEST_ASSERT_TRUE(decodeAnnounce(o.payload, o.len, a));
+    TEST_ASSERT_EQUAL(MAX_ANNOUNCE_CHANNELS, a.count);
+    TEST_ASSERT_EQUAL_STRING("ch9", a.ch[9].name);
+
+    // Requests on a slot past the 10th are served.
+    Request r{stores[15].epoch(), 0, 0, 0};
+    n = encodeRequest(r, buf, sizeof buf);
+    server->onPacket(0xA, ME, s_pktId++, 15, 0, buf, n, 20000);
+    TEST_ASSERT_EQUAL(1, server->queueLength());
+    delete server;
+    delete[] stores;
 }
 
 void test_ignores_beyond_max_hops() {
@@ -427,6 +489,8 @@ int main() {
     RUN_TEST(test_pack_empty_sends_one_last_packet);
     RUN_TEST(test_pack_never_exceeds_radio_limit);
     RUN_TEST(test_discover_yields_announce);
+    RUN_TEST(test_discover_list_announces_shared_channels);
+    RUN_TEST(test_announce_beyond_ten_channels);
     RUN_TEST(test_ignores_beyond_max_hops);
     RUN_TEST(test_ignores_request_on_discovery_or_unused_slot);
     RUN_TEST(test_reply_hop_limit_matches_request);

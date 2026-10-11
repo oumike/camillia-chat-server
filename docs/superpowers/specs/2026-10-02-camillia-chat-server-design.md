@@ -64,14 +64,21 @@ A node's channel and a server's channel **match** when both name and key are ide
 
 ### 4.3 Messages
 
-**`0x01 DISCOVER`** — node → broadcast, discovery channel. Empty body.
+**`0x01 DISCOVER`** — node → broadcast (or unicast to a set server), discovery channel. The body lists the node's own channels. An empty body (older nodes) is also valid.
 
-**`0x02 ANNOUNCE`** — server → the node that sent `DISCOVER`, discovery channel.
+| Field | Size |
+|---|---|
+| channel count `n` (0–10) | 1 |
+| `n` × channel ID | 4 each |
+
+Older servers only read the type byte, so they ignore the list. If several DISCOVERs from one node are queued, the server keeps the newest list.
+
+**`0x02 ANNOUNCE`** — server → the node that sent `DISCOVER`, discovery channel. It contains only the channels the server stores *and* the node listed, in store order, up to 10. If the node sent no list, it contains the server's first 10 channels. A server can store up to 20 channels, but each announce stays within the 10 that a node can track.
 
 | Field | Size |
 |---|---|
 | short name length, short name | 1 + ≤4 |
-| channel count `n` (1–10) | 1 |
+| channel count `n` (0–10) | 1 |
 | `n` × { channel ID, name length, name } | 4 + 1 + ≤11 each |
 
 **`0x03 REQUEST`** — node → server (unicast), on the channel being synced. One request per channel.
@@ -166,8 +173,8 @@ Dependencies on camillia-mt's `config.h` and `debug_flags.h` are replaced with s
 
 ### 5.3 Channel store
 
-- Up to **10 channels**, **250 messages each** (compile-time constants for now). A ring is allocated only for configured channels.
-- Each record about 224 bytes (sequence, sender, packet ID, receive time, text, source LoRa/MQTT): about 55 KB of PSRAM per channel, 550 KB at 10 channels (of 2 MB).
+- Up to **20 channels**, **250 messages each** (compile-time constants for now). A ring is allocated only for configured channels.
+- Each record about 224 bytes (sequence, sender, packet ID, receive time, text, source LoRa/MQTT): about 55 KB of PSRAM per channel, 1.1 MB at 20 channels (of 2 MB on Heltec V4, 8 MB on the Wio Tracker).
 - When a channel is full, the oldest message is dropped.
 - **Dedupe:** a message heard on both LoRa and MQTT, or relayed several times, is stored once (key: sender + packet ID).
 - **Stored:** text messages (`TEXT_MESSAGE_APP`) broadcast on a monitored channel. **Not stored:** DMs, other ports, and port-256 traffic.
@@ -188,7 +195,7 @@ Two tabs: **Config** (the settings below, firmware updates, and backup) and **Sy
 |---|---|---|
 | Identity | Short name, long name | Derived from MAC |
 | Radio | Region, preset, frequency slot | US, LongFast, default slot |
-| Channels | Number of channels (1–10); for each: name and key. The form shows at least 3 channel rows | 1 channel |
+| Channels | Number of channels (1–20); for each: name and key. The form shows at least 3 channel rows | 1 channel |
 | Replies | Batch size | 10 messages |
 | | Gap between packets | 3 s |
 | | Max hops | 7 |

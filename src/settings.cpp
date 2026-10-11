@@ -30,25 +30,50 @@ void settingsDefaults(Settings &s, uint32_t nodeId) {
 }
 
 bool settingsFromBlob(const uint8_t *blob, size_t len, uint8_t ver, Settings &out) {
-    if (ver == 6) {
+    if (ver == 7) {
         if (len != sizeof(Settings)) return false;
         memcpy(&out, blob, sizeof(Settings));
         return true;
     }
-    if (ver == 5) {
-        if (len != SETTINGS_V5_BLOB_LEN) return false;
-        settingsDefaults(out, 0);
-        memcpy(&out, blob, offsetof(Settings, otaAutoInstall));
-        return true;
+    // Copy only up to the version's last field: the last blob byte(s) are tail padding.
+    size_t used;
+    if (ver == 6 && len == SETTINGS_V6_BLOB_LEN) used = sizeof(SettingsV6);
+    else if (ver == 5 && len == SETTINGS_V5_BLOB_LEN) used = offsetof(SettingsV6, otaAutoInstall);
+    else if (ver == 4 && len == SETTINGS_V4_BLOB_LEN) used = offsetof(SettingsV6, displayBrightness);
+    else return false;
+    SettingsV6 o;
+    memset(&o, 0, sizeof o);
+    memcpy(&o, blob, used);
+
+    settingsDefaults(out, 0);
+    memcpy(out.shortName, o.shortName, sizeof out.shortName);
+    memcpy(out.longName, o.longName, sizeof out.longName);
+    memcpy(out.region, o.region, sizeof out.region);
+    out.modemPreset = o.modemPreset;
+    out.freqSlot = o.freqSlot;
+    out.chanCount = o.chanCount;
+    memset(out.ch, 0, sizeof out.ch);
+    memcpy(out.ch, o.ch, sizeof o.ch);
+    out.batchSize = o.batchSize;
+    out.packetGapMs = o.packetGapMs;
+    out.maxHops = o.maxHops;
+    out.mqttEnabled = o.mqttEnabled;
+    memcpy(out.mqttHost, o.mqttHost, sizeof out.mqttHost);
+    out.mqttPort = o.mqttPort;
+    memcpy(out.mqttUser, o.mqttUser, sizeof out.mqttUser);
+    memcpy(out.mqttPass, o.mqttPass, sizeof out.mqttPass);
+    memcpy(out.mqttRoot, o.mqttRoot, sizeof out.mqttRoot);
+    memcpy(out.staSsid, o.staSsid, sizeof out.staSsid);
+    memcpy(out.staPass, o.staPass, sizeof out.staPass);
+    memcpy(out.tz, o.tz, sizeof out.tz);
+    if (ver >= 5) {
+        out.displayBrightness = o.displayBrightness;
+        out.displayDimAfterSec = o.displayDimAfterSec;
+        out.displayDimLevel = o.displayDimLevel;
+        out.displayPageSec = o.displayPageSec;
     }
-    if (ver == 4) {
-        if (len != SETTINGS_V4_BLOB_LEN) return false;
-        settingsDefaults(out, 0);
-        // Copy only up to displayBrightness: the last blob byte(s) are tail padding.
-        memcpy(&out, blob, offsetof(Settings, displayBrightness));
-        return true;
-    }
-    return false;
+    if (ver >= 6) out.otaAutoInstall = o.otaAutoInstall;
+    return true;
 }
 
 static bool fail(char *err, size_t cap, const char *msg) {
@@ -60,7 +85,7 @@ bool settingsValidate(const Settings &s, char *err, size_t cap) {
     if (!s.shortName[0]) return fail(err, cap, "Short name is required");
     if (!s.longName[0]) return fail(err, cap, "Node name is required");
     if (s.chanCount < 1 || s.chanCount > SETTINGS_MAX_CHANNELS)
-        return fail(err, cap, "Number of channels must be 1-10");
+        return fail(err, cap, "Number of channels must be 1-20");
     for (int i = 0; i < s.chanCount; i++) {
         const ChannelCfg &c = s.ch[i];
         if (!c.name[0]) return fail(err, cap, "Every channel needs a name");

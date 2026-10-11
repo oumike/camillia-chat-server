@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-constexpr int SETTINGS_MAX_CHANNELS = 10;
+constexpr int SETTINGS_MAX_CHANNELS = 20;
 
 struct ChannelCfg {
     char    name[12];
@@ -40,13 +40,43 @@ struct Settings {
     bool       otaAutoInstall;       // install a newer signed release without asking
 };
 
-// Length of a version-4 NVS blob: the old struct ended at tz and its sizeof was
-// padded up to alignof(Settings), so the blob is offsetof() rounded up to that.
-constexpr size_t SETTINGS_V4_BLOB_LEN =
-    (offsetof(Settings, displayBrightness) + alignof(Settings) - 1) / alignof(Settings) * alignof(Settings);
-// Same for version 5, which ended at displayPageSec.
-constexpr size_t SETTINGS_V5_BLOB_LEN =
-    (offsetof(Settings, otaAutoInstall) + alignof(Settings) - 1) / alignof(Settings) * alignof(Settings);
+// The NVS layout of versions 4-6, frozen: 10 channel slots. Never edit it; it is
+// only read, to upgrade an old blob.
+struct SettingsV6 {
+    char       shortName[5];
+    char       longName[25];
+    char       region[12];
+    uint8_t    modemPreset;
+    uint8_t    freqSlot;
+    uint8_t    chanCount;
+    ChannelCfg ch[10];
+    uint8_t    batchSize;
+    uint16_t   packetGapMs;
+    uint8_t    maxHops;
+    bool       mqttEnabled;
+    char       mqttHost[64];
+    uint16_t   mqttPort;
+    char       mqttUser[32];
+    char       mqttPass[64];
+    char       mqttRoot[48];
+    char       staSsid[33];
+    char       staPass[64];
+    char       tz[48];
+    uint8_t    displayBrightness;    // v5+
+    uint16_t   displayDimAfterSec;
+    uint8_t    displayDimLevel;
+    uint16_t   displayPageSec;
+    bool       otaAutoInstall;       // v6
+};
+
+// An old struct's sizeof was padded up to its alignment, so a blob that ended
+// at a field is offsetof() rounded up to that.
+constexpr size_t settingsBlobLen(size_t end) {
+    return (end + alignof(SettingsV6) - 1) / alignof(SettingsV6) * alignof(SettingsV6);
+}
+constexpr size_t SETTINGS_V4_BLOB_LEN = settingsBlobLen(offsetof(SettingsV6, displayBrightness));
+constexpr size_t SETTINGS_V5_BLOB_LEN = settingsBlobLen(offsetof(SettingsV6, otaAutoInstall));
+constexpr size_t SETTINGS_V6_BLOB_LEN = sizeof(SettingsV6);
 
 void settingsDefaults(Settings &s, uint32_t nodeId);
 // False with a human-readable reason in err if anything is out of range.
@@ -56,8 +86,9 @@ bool settingsValidate(const Settings &s, char *err, size_t errCap);
 bool parseKeyBase64(const char *in, uint8_t key[32], uint8_t &len);
 void formatKeyBase64(const uint8_t *key, uint8_t len, char *out, size_t cap);
 
-// Rebuild Settings from a stored NVS blob (pure). Version 6 is the current layout;
-// older versions predate later fields (v4: display, v5: OTA), which take their defaults.
+// Rebuild Settings from a stored NVS blob (pure). Version 7 is the current layout
+// (20 channels); 4-6 had 10 channel slots and predate later fields (v4: display,
+// v5: OTA), which take their defaults.
 bool settingsFromBlob(const uint8_t *blob, size_t len, uint8_t ver, Settings &out);
 
 // Device only (settings_nvs.cpp).

@@ -71,13 +71,13 @@ void CsServer::begin(const ServerConfig &cfg, ChannelStore *stores, const uint32
     if (_cfg.batchSize < 1) _cfg.batchSize = 1;
     if (_cfg.batchSize > CS_MAX_BATCH) _cfg.batchSize = CS_MAX_BATCH;
     _stores = stores;
-    _chanCount = chanCount > MAX_ANNOUNCE_CHANNELS ? MAX_ANNOUNCE_CHANNELS : chanCount;
-    memset(&_announce, 0, sizeof(_announce));
-    strncpy(_announce.shortName, _cfg.shortName, sizeof(_announce.shortName) - 1);
-    _announce.count = (uint8_t)_chanCount;
+    _chanCount = chanCount < 0 ? 0 : chanCount > CS_MAX_CHANNELS ? CS_MAX_CHANNELS : chanCount;
+    memset(_shortName, 0, sizeof _shortName);
+    strncpy(_shortName, _cfg.shortName, sizeof(_shortName) - 1);
+    memset(_chanNames, 0, sizeof _chanNames);
     for (int i = 0; i < _chanCount; i++) {
-        _announce.ch[i].id = chanIds[i];
-        strncpy(_announce.ch[i].name, chanNames[i], sizeof(_announce.ch[i].name) - 1);
+        _chanIds[i] = chanIds[i];
+        strncpy(_chanNames[i], chanNames[i], sizeof(_chanNames[i]) - 1);
     }
     _qLen = _annLen = _txCount = _txIdx = 0;
     _recentLen = _recentNext = 0;
@@ -105,8 +105,14 @@ void CsServer::onPacket(uint32_t from, uint32_t to, uint32_t packetId, int chanS
     if ((t == REQUEST || t == DISCOVER) && seenRecently(from, packetId, nowMs)) return;
 
     if (t == DISCOVER) {
-        for (int i = 0; i < _annLen; i++) if (_ann[i].to == from) return;
-        if (_annLen < CS_ANNOUNCE_CAP) _ann[_annLen++] = {from, hopsTravelled};
+        AnnounceTo a{};
+        a.to = from;
+        a.hops = hopsTravelled;
+        if (!decodeDiscover(payload, len, a.ids, a.n, a.hasList)) return;
+        for (int i = 0; i < _annLen; i++) {
+            if (_ann[i].to == from) { _ann[i] = a; return; }   // newest list wins
+        }
+        if (_annLen < CS_ANNOUNCE_CAP) _ann[_annLen++] = a;
         return;
     }
     if (t != REQUEST || chanSlot < 0 || chanSlot >= _chanCount) return;
@@ -138,6 +144,21 @@ void CsServer::startNext(uint32_t nowUnix, bool timeValid, uint32_t nowUptimeSec
     _txHops = p.hops;
 }
 
+// Shared channels in store order. A client that sent no list gets the first
+// MAX_ANNOUNCE_CHANNELS, as before the list existed.
+void CsServer::buildAnnounce(const AnnounceTo &a, Announce &out) const {
+    memset(&out, 0, sizeof out);
+    memcpy(out.shortName, _shortName, sizeof out.shortName);
+    for (int i = 0; i < _chanCount && out.count < MAX_ANNOUNCE_CHANNELS; i++) {
+        bool shared = !a.hasList;
+        for (uint8_t k = 0; k < a.n && !shared; k++) shared = a.ids[k] == _chanIds[i];
+        if (!shared) continue;
+        out.ch[out.count].id = _chanIds[i];
+        memcpy(out.ch[out.count].name, _chanNames[i], sizeof out.ch[out.count].name);
+        out.count++;
+    }
+}
+
 void CsServer::clearSlot(int slot) {
     int w = 0;
     for (int i = 0; i < _qLen; i++) if (_q[i].slot != slot) _q[w++] = _q[i];
@@ -156,7 +177,9 @@ bool CsServer::poll(uint32_t nowMs, uint32_t nowUnix, bool timeValid, uint32_t n
         out.to = a.to;
         out.chanSlot = -1;
         out.hopLimit = a.hops;
-        out.len = encodeAnnounce(_announce, out.payload, sizeof(out.payload));
+        Announce ann;
+        buildAnnounce(a, ann);
+        out.len = encodeAnnounce(ann, out.payload, sizeof(out.payload));
     } else {
         if (!busy()) {
             if (!_qLen) return false;
