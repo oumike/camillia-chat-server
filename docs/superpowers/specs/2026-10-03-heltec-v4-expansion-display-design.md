@@ -156,13 +156,13 @@ public:
 
 **Status bar (every page, top 20 px):** "Camillia Chat Server" on the left. On the right: the clock `HH:MM` (only when the clock is set), the battery icon, always shown (same states as the OLED: absent as an empty icon with `--`, external, or percent) and three page dots.
 
-**Footer (every page, bottom 16 px):** the IP address, centred: `IP x.x.x.x` or `AP x.x.x.x`. Always shown, and the only place the IP appears.
+**Footer (every page, bottom 16 px):** on the left, the node's long name, `!nodeid` and short name in the accent colour (cut with dots if too long); on the right, the IP address: `IP x.x.x.x` or `AP x.x.x.x`. Always shown, and the only place the identity and IP appear.
 
 **Page 1: Health**
 
 | Section | Content |
 |---|---|
-| Node | long name and `!nodeid`, short name, region and preset |
+| Node | region and preset (the name and ID are in the footer) |
 | Network | MQTT state and received/decrypted counts (the IP is in the footer) |
 | Radio | last RX `12s ago  -97 dBm  6.5 dB` (or `none yet`), airtime in the last hour against the limit, e.g. `0.8% / 10%` (`/ none` when the limit is 100%) |
 | Store | per channel `name  count/250`, up to 10 rows in two columns; flash used/total KB; free PSRAM KB |

@@ -40,10 +40,10 @@ uint32_t       s_splashUntilMs = 0;
 
 lv_obj_t *s_main = nullptr;
 lv_obj_t *s_barRight = nullptr;
-lv_obj_t *s_footIp = nullptr;
+lv_obj_t *s_footId = nullptr, *s_footIp = nullptr;
 lv_obj_t *s_dots[3];
 lv_obj_t *s_page[3];
-lv_obj_t *s_p1[7];                       // page 1 single rows
+lv_obj_t *s_p1[6];                       // page 1 single rows
 lv_obj_t *s_p1Chan[kChanRows * 2];       // page 1 store rows, two columns
 lv_obj_t *s_msgHead[kFeedRows], *s_msgText[kFeedRows], *s_msgEmpty = nullptr;
 lv_obj_t *s_act[kActRows], *s_actEmpty = nullptr;
@@ -280,26 +280,28 @@ void buildMain() {
         lv_obj_set_style_bg_color(s_dots[i], dim, 0);
     }
 
-    // Footer, on every page: the IP address (shown nowhere else).
+    // Footer, on every page: node identity left, IP address right (both shown
+    // nowhere else).
     lv_obj_t *foot = mkBox(s_main, 0, kH - kFootH, kW, kFootH);
     lv_obj_set_style_bg_color(foot, c565(kPanelBg), 0);
     lv_obj_set_style_bg_opa(foot, LV_OPA_COVER, 0);
-    s_footIp = mkRow(foot, &lv_font_montserrat_12, text, 4, 1, kW - 8);
-    lv_obj_set_style_text_align(s_footIp, LV_TEXT_ALIGN_CENTER, 0);
+    s_footId = mkRow(foot, &lv_font_montserrat_12, accent, 4, 1, kW - 132);
+    s_footIp = mkRow(foot, &lv_font_montserrat_12, text, kW - 124, 1, 120);
+    lv_obj_set_style_text_align(s_footIp, LV_TEXT_ALIGN_RIGHT, 0);
 
     for (int i = 0; i < 3; i++) {
         s_page[i] = mkBox(s_main, 0, kBarH, kW, kH - kBarH - kFootH);
         setVisible(s_page[i], false);
     }
 
-    // Page 1: health. 12 rows of 16 px; rows 5-9 are the store, two columns.
+    // Page 1: health. 11 rows of 16 px; rows 4-8 are the store, two columns.
     const lv_font_t *f12 = &lv_font_montserrat_12;
     auto rowY = [](int row) { return (int32_t)(3 + row * 16); };
-    for (int i = 0; i < 5; i++) s_p1[i] = mkRow(s_page[0], f12, i == 0 ? accent : text, 6, rowY(i), 308);
+    for (int i = 0; i < 4; i++) s_p1[i] = mkRow(s_page[0], f12, text, 6, rowY(i), 308);
     for (int i = 0; i < kChanRows * 2; i++)
-        s_p1Chan[i] = mkRow(s_page[0], f12, dim, (i % 2) ? 163 : 6, rowY(5 + i / 2), 151);
+        s_p1Chan[i] = mkRow(s_page[0], f12, dim, (i % 2) ? 163 : 6, rowY(4 + i / 2), 151);
+    s_p1[4] = mkRow(s_page[0], f12, text, 6, rowY(9), 308);
     s_p1[5] = mkRow(s_page[0], f12, text, 6, rowY(10), 308);
-    s_p1[6] = mkRow(s_page[0], f12, text, 6, rowY(11), 308);
 
     // Page 2: message feed, two lines per message (15 + 16 px).
     for (int i = 0; i < kFeedRows; i++) {
@@ -341,6 +343,10 @@ void fillBar(const DisplayStatus &st) {
 }
 
 void fillFooter(const DisplayStatus &st) {
+    const Settings *s = st.settings;
+    char id[64];
+    snprintf(id, sizeof id, "%s  !%08x  (%s)", s ? s->longName : "", (unsigned)st.nodeId, s ? s->shortName : "");
+    setText(s_footId, id);
     char buf[40];
     if (!st.ip[0]) snprintf(buf, sizeof buf, "IP --");
     else snprintf(buf, sizeof buf, "%s%s", strncmp(st.ip, "AP ", 3) == 0 ? "" : "IP ", st.ip);
@@ -359,24 +365,22 @@ const char *chanOf(const DisplayStatus &st, int slot) {
 void fillHealth(const DisplayStatus &st) {
     const Settings *s = st.settings;
     char buf[96], t1[16];
-    snprintf(buf, sizeof buf, "%s  !%08x  (%s)", s ? s->longName : "", (unsigned)st.nodeId, s ? s->shortName : "");
-    setText(s_p1[0], buf);
     const char *preset = s && s->modemPreset < PRESET_COUNT ? kPresets[s->modemPreset].channelName : "?";
     snprintf(buf, sizeof buf, "Region %s  Preset %s", s ? s->region : "?", preset);
-    setText(s_p1[1], buf);
+    setText(s_p1[0], buf);
     snprintf(buf, sizeof buf, "MQTT %s  rx %u  decrypted %u", st.mqtt ? st.mqtt : "?", (unsigned)st.mqttRx,
              (unsigned)st.mqttDecrypted);
-    setText(s_p1[2], buf);
+    setText(s_p1[1], buf);
     if (st.haveLastRx) {
         formatUptime(st.lastRxAgeSec, t1, sizeof t1);
         snprintf(buf, sizeof buf, "Last RX %s ago  %.0f dBm  %.1f dB", t1, st.lastRssi, st.lastSnr);
     } else {
         snprintf(buf, sizeof buf, "Last RX none yet");
     }
-    setText(s_p1[3], buf);
+    setText(s_p1[2], buf);
     if (st.dutyLimitPct >= 100) snprintf(buf, sizeof buf, "Airtime (1 h) %.1f%% / none", st.airtimePct);
     else snprintf(buf, sizeof buf, "Airtime (1 h) %.1f%% / %u%%", st.airtimePct, (unsigned)st.dutyLimitPct);
-    setText(s_p1[4], buf);
+    setText(s_p1[3], buf);
     for (int i = 0; i < kChanRows * 2; i++) {
         if (i < st.chanCount) {
             const char *n = chanOf(st, i);
@@ -388,13 +392,13 @@ void fillHealth(const DisplayStatus &st) {
     }
     snprintf(buf, sizeof buf, "Flash %u / %u KB   PSRAM free %u KB", (unsigned)st.flashUsedKB,
              (unsigned)st.flashTotalKB, (unsigned)st.psramFreeKB);
-    setText(s_p1[5], buf);
+    setText(s_p1[4], buf);
     formatUptime(st.uptimeSec, t1, sizeof t1);
     char batt[24];
     if (st.battState == BATT_PRESENT) snprintf(batt, sizeof batt, "%.2f V %u%%", st.battVolts, (unsigned)st.battPct);
     else snprintf(batt, sizeof batt, "USB");
     snprintf(buf, sizeof buf, "Up %s   %s   %s", t1, st.clockSet ? "clock set" : "clock not set", batt);
-    setText(s_p1[6], buf);
+    setText(s_p1[5], buf);
 }
 
 void fillFeed(const DisplayStatus &st) {
