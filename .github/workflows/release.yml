@@ -63,8 +63,10 @@ jobs:
         # Toolchains only; never .pio/, so a release cannot pick up stale objects.
         uses: actions/cache@v4
         with:
-          path: ~/.platformio
-          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          path: |
+            ~/.platformio
+            ~/.platformio-p4
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'envs/*.ini') }}
           restore-keys: pio-${{ runner.os }}-
 
       - name: Install PlatformIO and esptool
@@ -74,7 +76,10 @@ jobs:
       - name: Install the device framework
         # release.sh checks for boot_app0.bin before it builds anything, and that
         # file only exists once the Arduino ESP32 framework has been downloaded.
-        run: pio pkg install -e heltec-v4
+        # The P4 envs use their own core (see scripts/release.sh).
+        run: |
+          pio pkg install -e heltec-v4
+          PLATFORMIO_CORE_DIR="$HOME/.platformio-p4" pio pkg install -e p4-amoled-sx1262
 
       - name: Install OTA signing key
         env:

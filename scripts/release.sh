@@ -12,6 +12,7 @@
 #   camillia-chat-server-heltec-v4-expansion-vX.Y.Z.bin   same, for the V4 + expansion display board
 #   camillia-chat-server-heltec-v4-r8-vX.Y.Z.bin          same, for the V4-R8 + Expansion Kit V2
 #   camillia-chat-server-wio-tracker-l2-vX.Y.Z.bin        same, for the Seeed Wio Tracker L2
+#   camillia-chat-server-<env>-vX.Y.Z.bin                 same, for each board in envs/*.ini
 #   camillia-chat-server-<env>-vX.Y.Z-ota.bin    app image for over-the-air updates
 #   camillia-chat-server-<env>-vX.Y.Z-ota.bin.sig  detached ECDSA P-256 signature of it
 #   flash.sh                                     helper that writes it with esptool
@@ -23,17 +24,60 @@
 
 set -e
 
-RELEASE_ENVS=(heltec-v4 heltec-v4-expansion heltec-v4-r8 wio-tracker-l2)
+RELEASE_ENVS=(
+    heltec-v4
+    heltec-v4-expansion
+    heltec-v4-r8
+    wio-tracker-l2
+    tdeck
+    tdeck-pro
+    tlora-pager-tft
+    mesh-deck
+    m9
+    crowpanel-35
+    crowpanel-50
+    p4-amoled-sx1262
+    p4-amoled-lr2021
+)
 TEST_ENV="native"
 
-env_out_name()          { echo "$1"; }
-env_chip()              { echo "esp32s3"; }
-env_flash_size()        { echo "16MB"; }
-env_flash_mode()        { echo "dio"; }
-env_bootloader_offset() { echo "0x0"; }
+# The P4 envs use pioarduino, whose Arduino 3.x framework package has the same
+# name as the S3 envs' 2.x one, so they get their own PlatformIO core (the same
+# split as camillia-mt's release.sh).
+DEFAULT_PIO_CORE_DIR="${PLATFORMIO_CORE_DIR:-$HOME/.platformio}"
+P4_PIO_CORE_DIR="${CAMILLIA_P4_PIO_CORE_DIR:-${DEFAULT_PIO_CORE_DIR}-p4}"
+
+is_p4_env() {
+    case "$1" in
+        p4-amoled-*) return 0 ;;
+        *)           return 1 ;;
+    esac
+}
+
+pio_core_dir_for_env() {
+    if is_p4_env "$1"; then echo "$P4_PIO_CORE_DIR"; else echo "$DEFAULT_PIO_CORE_DIR"; fi
+}
+
+run_pio_for_env() {
+    local env_name="$1"
+    shift
+    PLATFORMIO_CORE_DIR="$(pio_core_dir_for_env "$env_name")" "$PIO" "$@"
+}
+
+env_out_name()   { echo "$1"; }
+env_flash_size() { echo "16MB"; }
+env_chip() {
+    if is_p4_env "$1"; then echo "esp32p4"; else echo "esp32s3"; fi
+}
+env_flash_mode() {
+    if is_p4_env "$1"; then echo "qio"; else echo "dio"; fi
+}
+env_bootloader_offset() {
+    if is_p4_env "$1"; then echo "0x2000"; else echo "0x0"; fi
+}
 
 has_env() {
-    grep -q "^\[env:$1\]" platformio.ini
+    cat platformio.ini envs/*.ini 2>/dev/null | grep -q "^\[env:$1\]"
 }
 
 remote_tag_exists() {
@@ -612,9 +656,21 @@ for env_name in "${RELEASE_ENVS[@]}"; do
         exit 1
     fi
     if [[ "$NO_CLEAN" != true ]]; then
-        "$PIO" run -e "$env_name" -t fullclean
+        run_pio_for_env "$env_name" run -e "$env_name" -t fullclean
     fi
-    "$PIO" run -e "$env_name"
+done
+# No auto-clean inside the loop: switching cores between envs must not wipe
+# the images already built. Each env's boot_app0 is copied right after its
+# build, so an S3 image can never pick up the P4 core's (or the reverse).
+for env_name in "${RELEASE_ENVS[@]}"; do
+    run_pio_for_env "$env_name" run -e "$env_name" --disable-auto-clean
+    env_boot_app0=$(find "$(pio_core_dir_for_env "$env_name")/packages/framework-arduinoespressif32/tools/partitions" \
+        -name boot_app0.bin 2>/dev/null | head -1)
+    if [[ -z "$env_boot_app0" ]]; then
+        echo "Error: boot_app0.bin missing after building ${env_name}." >&2
+        exit 1
+    fi
+    cp "$env_boot_app0" ".pio/build/${env_name}/boot_app0.bin"
 done
 
 # ── Commit, push, and tag ─────────────────────────────────────────────────────
@@ -661,7 +717,7 @@ merge_assets() {
             -fs "$(env_flash_size "$env_name")" \
             "$(env_bootloader_offset "$env_name")" "${d}/bootloader.bin" \
             0x8000  "${d}/partitions.bin" \
-            0xe000  "$BOOT_APP0" \
+            0xe000  "${d}/boot_app0.bin" \
             0x10000 "${d}/firmware.bin"
         cp "${d}/firmware.elf" "dist/camillia-chat-server-${out_name}-${tag}.elf"
         # Detached ECDSA-P256/SHA-256 signature; the device checks it before

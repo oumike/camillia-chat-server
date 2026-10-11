@@ -51,3 +51,13 @@ jobs:
           pio run -e heltec-v4-expansion
           pio run -e heltec-v4-r8
           pio run -e wio-tracker-l2
+          for e in tdeck tdeck-pro tlora-pager-tft mesh-deck m9 crowpanel-35 crowpanel-50; do
+            pio run -e "$e"
+          done
+
+      - name: Build firmware (ESP32-P4)
+        # pioarduino's Arduino 3.x package shares its name with the S3 envs'
+        # 2.x one, so the P4 envs get their own PlatformIO core.
+        run: |
+          PLATFORMIO_CORE_DIR="$HOME/.platformio-p4" pio run -e p4-amoled-sx1262 --disable-auto-clean
+          PLATFORMIO_CORE_DIR="$HOME/.platformio-p4" pio run -e p4-amoled-lr2021 --disable-auto-clean
