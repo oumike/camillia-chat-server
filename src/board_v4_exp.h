@@ -21,7 +21,7 @@
 #define BATT_ADC_PIN           1
 #define BATT_DIV         5.1205f
 #define BATT_SENSE_PIN        37
-#define BATT_SENSE_ON        LOW
+#define BATT_SENSE_ON        LOW   // default only; battery_adc.cpp auto-detects polarity
 
 // VEXT: driven LOW once, as the first thing setup() does (main.cpp), and never
 // touched again — displayBegin() does not drive it. camillia-mt's notes follow
