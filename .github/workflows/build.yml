@@ -49,4 +49,5 @@ jobs:
           pio run -e heltec-v4
           pio run -e heltec-v4-test
           pio run -e heltec-v4-expansion
+          pio run -e heltec-v4-r8
           pio run -e wio-tracker-l2

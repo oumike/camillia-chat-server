@@ -3,7 +3,8 @@
 // Panel_HeltecV4Tft and Touch_Heltec_CHSC6X are the DEVICE_HELTEC_V4_EXPANSION
 // branches of camillia-mt's hal/display.h, unchanged. LGFX_V4Exp is that file's
 // LGFX_TDeck reduced to the same branches (SPI3 bus, ST7789 panel, PWM light,
-// CHSC6X touch on Wire1), with the values from board_v4_exp.h.
+// CHSC6X touch on Wire1), with the values from board_v4_exp.h. The heltec-v4-r8
+// env reuses it unchanged with board_v4_r8.h's pins (camillia-mt does the same).
 #include <LovyanGFX.hpp>
 #include "chsc6x.h"
 #include "lgfx/v1/Touch.hpp"

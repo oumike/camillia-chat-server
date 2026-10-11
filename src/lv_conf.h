@@ -1,4 +1,4 @@
-// LVGL 9.5.0 config for the heltec-v4-expansion env (found through
+// LVGL 9.5.0 config for the heltec-v4-expansion and heltec-v4-r8 envs (found through
 // -DLV_CONF_INCLUDE_SIMPLE -Isrc). Trimmed from camillia-mt 32fea4f src/lv_conf.h.
 #ifndef LV_CONF_H
 #define LV_CONF_H

@@ -1,5 +1,6 @@
-// Display hardware for the Heltec V4 expansion kit (heltec-v4-expansion):
-// ST7789 through LovyanGFX, PWM backlight, CHSC6X touch on Wire1.
+// Display hardware for the Heltec V4 expansion kit (heltec-v4-expansion) and
+// the V4-R8 on Expansion Kit V2 (heltec-v4-r8): ST7789 through LovyanGFX, PWM
+// backlight, CHSC6X touch (Wire1 on the V4 kit, Wire on the V2 kit).
 #include "display_hal.h"
 #include <Arduino.h>
 #include <Wire.h>
@@ -19,7 +20,7 @@ uint8_t    s_touchFails = 0;
 }  // namespace
 
 bool dhalBegin(char *err, size_t cap) {
-    // GPIO36 (VEXT) is already LOW from the top of setup(); not touched here.
+    // VEXT is already on from boardEarlyInit(); not touched here.
     if (!s_lcd.init()) {
         snprintf(err, cap, "panel init failed");
         return false;
@@ -29,13 +30,14 @@ bool dhalBegin(char *err, size_t cap) {
     s_lcd.setBrightness(TFT_BRIGHTNESS_DEFAULT);
     s_lcd.fillScreen(TFT_BLACK);
 
-    // lcd.init() started the CHSC6X on Wire1; if it does not ACK, never poll it.
+    // lcd.init() started the CHSC6X; if it does not ACK, never poll it.
+    TwoWire &touchBus = (TOUCH_I2C_PORT == 1) ? Wire1 : Wire;
     // chsc6x_init only waits 30 ms after reset, so retry the probe before giving up.
     bool touchAck = false;
     for (int attempt = 0; attempt < 3 && !touchAck; attempt++) {
         delay(100);
-        Wire1.beginTransmission((uint8_t)TOUCH_ADDR);
-        touchAck = (Wire1.endTransmission() == 0);
+        touchBus.beginTransmission((uint8_t)TOUCH_ADDR);
+        touchAck = (touchBus.endTransmission() == 0);
     }
     if (!touchAck) {
         s_touchOff = true;

@@ -14,8 +14,16 @@ static bool s_senseLocked = false;
 static constexpr float kPickMarginV = 0.03f;   // at the ADC pin
 static constexpr float kDeadAdcV = 0.05f;
 
+static void setSense(int level) {
+#if BATT_SENSE_PIN >= 0
+    digitalWrite(BATT_SENSE_PIN, level);
+#else
+    (void)level;
+#endif
+}
+
 static float sampleAdcVolts(int senseLevel) {
-    digitalWrite(BATT_SENSE_PIN, senseLevel);
+    setSense(senseLevel);
     delayMicroseconds(500);   // let the divider settle
     uint32_t mv = 0;
     for (int i = 0; i < 8; i++) mv += analogReadMilliVolts(BATT_ADC_PIN);
@@ -23,8 +31,12 @@ static float sampleAdcVolts(int senseLevel) {
 }
 
 void batteryBegin() {
+#if BATT_SENSE_PIN >= 0
     pinMode(BATT_SENSE_PIN, OUTPUT);
-    digitalWrite(BATT_SENSE_PIN, !s_senseOn);
+    setSense(!s_senseOn);
+#else
+    s_senseLocked = true;   // divider permanently connected (V4-R8)
+#endif
     analogSetPinAttenuation(BATT_ADC_PIN, ADC_11db);
     s_nextMs = 0;
 }
@@ -41,7 +53,7 @@ void batteryLoop(uint32_t nowMs) {
                       BATT_SENSE_PIN, s_senseOn ? "HIGH" : "LOW", vDef, vOpp);
     }
     float adc = sampleAdcVolts(s_senseOn);
-    if (adc < kDeadAdcV) {
+    if (BATT_SENSE_PIN >= 0 && adc < kDeadAdcV) {
         // Battery may have been plugged in after the first probe.
         float alt = sampleAdcVolts(!s_senseOn);
         if (alt > adc + kPickMarginV) {
@@ -49,7 +61,7 @@ void batteryLoop(uint32_t nowMs) {
             adc = alt;
         }
     }
-    digitalWrite(BATT_SENSE_PIN, !s_senseOn);
+    setSense(!s_senseOn);
     float v = adc * BATT_DIV;
     s_volts = (s_volts <= 0.1f || v < 2.5f) ? v : s_volts * 0.7f + v * 0.3f;
 }

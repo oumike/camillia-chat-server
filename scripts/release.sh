@@ -10,6 +10,7 @@
 # What a release publishes:
 #   camillia-chat-server-heltec-v4-vX.Y.Z.bin   merged factory image, written at 0x0
 #   camillia-chat-server-heltec-v4-expansion-vX.Y.Z.bin   same, for the V4 + expansion display board
+#   camillia-chat-server-heltec-v4-r8-vX.Y.Z.bin          same, for the V4-R8 + Expansion Kit V2
 #   camillia-chat-server-wio-tracker-l2-vX.Y.Z.bin        same, for the Seeed Wio Tracker L2
 #   camillia-chat-server-<env>-vX.Y.Z-ota.bin    app image for over-the-air updates
 #   camillia-chat-server-<env>-vX.Y.Z-ota.bin.sig  detached ECDSA P-256 signature of it
@@ -22,7 +23,7 @@
 
 set -e
 
-RELEASE_ENVS=(heltec-v4 heltec-v4-expansion wio-tracker-l2)
+RELEASE_ENVS=(heltec-v4 heltec-v4-expansion heltec-v4-r8 wio-tracker-l2)
 TEST_ENV="native"
 
 env_out_name()          { echo "$1"; }
