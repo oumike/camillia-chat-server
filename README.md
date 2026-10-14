@@ -41,6 +41,13 @@ The P4's ESP32-C6 needs ESP-Hosted firmware for WiFi; camillia-mt's
 Flash the factory image once over USB (`flash.sh`). After that, updates can
 come over the air.
 
+## DM commands
+
+Direct-message the server on any of its channels and it replies to you:
+
+- `help` — list the commands
+- `status` — uptime, battery, MQTT, airtime and stored messages per channel
+
 ## Web config
 
 Join the open `camillia-cs-<short name>` access point and browse to

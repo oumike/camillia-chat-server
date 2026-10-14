@@ -384,6 +384,60 @@ static void serialLoop(uint32_t nowMs) {
     }
 }
 
+// Reply to the "status" DM command.
+static String statusText() {
+    uint32_t up = millis() / 1000;
+    char buf[48];
+    snprintf(buf, sizeof buf, "up %lud%luh%lum", (unsigned long)(up / 86400), (unsigned long)(up / 3600 % 24),
+             (unsigned long)(up / 60 % 60));
+    String t = String(s_settings.longName) + ": " + buf;
+    if (batteryStateFromVolts(batteryVolts()) == BATT_PRESENT) t += ", batt " + String(batteryPercentFromVolts(batteryVolts())) + "%";
+    t += String(", mqtt ") + mqttState() + ", air " +
+         String(100.0f * s_airtime.usedMs(millis()) / AirtimeBudget::WINDOW_MS, 1) + "%";
+    for (int i = 0; i < s_settings.chanCount; i++)
+        t += String(i ? "; " : ", ") + s_settings.ch[i].name + " " + String(s_stores[i].count()) + " msgs";
+    return t;
+}
+
+static String helpText();
+
+// Commands a node can DM to the server; each returns the reply text.
+static const struct { const char *name; const char *desc; String (*run)(); } kDmCommands[] = {
+    {"help", "list commands", helpText},
+    {"status", "server status", statusText},
+};
+
+static String helpText() {
+    String t = "Commands:";
+    for (const auto &c : kDmCommands) t += String("\n") + c.name + " - " + c.desc;
+    return t;
+}
+
+static bool handleDmCommand(const MeshPacket &pkt) {
+    if (pkt.portnum != TEXT_MESSAGE_APP || pkt.hdr.to != s_nodeId || pkt.hdr.from == s_nodeId) return false;
+    int slot = slotForPacket(pkt);
+    if (slot == -2) return false;
+    char text[sizeof pkt.payload + 1];
+    memcpy(text, pkt.payload, pkt.payloadLen);
+    text[pkt.payloadLen] = 0;
+    String cmd = text;
+    cmd.trim();
+    for (const auto &c : kDmCommands) {
+        if (!cmd.equalsIgnoreCase(c.name)) continue;
+        String reply = c.run();
+        uint8_t buf[240];
+        size_t n = encodeTextMessageUnicast(reply.substring(0, 200).c_str(), s_nodeId, pkt.hdr.from, buf, sizeof buf);
+        if (!n) return true;
+        bool ok = s_airtime.canSend(millis(), airMsFor(n), s_dutyLimitPct) &&
+                  radioSendData(pkt.hdr.from, slot, s_settings.maxHops, buf, n);
+        if (ok) s_airtime.record(millis(), airMsFor(n));
+        Serial.printf("[cs] %s DM from !%08x ch%d: reply %s\n", c.name, (unsigned)pkt.hdr.from, slot,
+                      ok ? "ok" : "FAILED");
+        return true;
+    }
+    return false;
+}
+
 static void ingest(const MeshPacket &pkt, MsgSource source) {
     if (pkt.portnum == NODEINFO_APP && pkt.hdr.from != s_nodeId) {
         UserInfo u;
@@ -451,6 +505,7 @@ void loop() {
         s_lastSnr = pkt.snr;
         s_haveLastRx = true;
         if (pkt.portnum == PORT_CHAT_SERVER) handleChatServerPacket(pkt, nowMs);
+        else if (handleDmCommand(pkt)) {}
         else ingest(pkt, SRC_LORA);
     }
     serialLoop(nowMs);
