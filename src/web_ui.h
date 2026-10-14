@@ -14,4 +14,6 @@ using MessageClearer = std::function<void(int slot)>;
 void webBegin(Settings *settings, std::function<void()> onSaved,
               std::function<String()> statusJson, MessageLister listMessages,
               MessageClearer clearMessages, std::function<String()> storageJson);
+// Handler for the "Send announcement" button; returns false if it could not be queued.
+void webSetAnnounce(std::function<bool()> announce);
 void webLoop();

@@ -473,6 +473,7 @@ void setup() {
     wifiBegin();
     configTzTime(s_settings.tz, "pool.ntp.org");
     webBegin(&s_settings, [] { s_restartAtMs = millis() + 1500; }, statusJson, listMessages, clearMessages, storageJson);
+    webSetAnnounce([] { return s_server.announceBroadcast(); });
     otaBegin(&s_settings);
 
     static_assert(CS_MAX_CHANNELS == SETTINGS_MAX_CHANNELS, "store and settings channel limits differ");

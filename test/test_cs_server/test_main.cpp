@@ -231,6 +231,21 @@ void test_discover_yields_announce() {
     TEST_ASSERT_FALSE(rig.poll(10000, o));
 }
 
+void test_announce_broadcast_once() {
+    Rig rig(0, 5, 5);
+    TEST_ASSERT_TRUE(rig.server.announceBroadcast());
+    TEST_ASSERT_TRUE(rig.server.announceBroadcast());   // already queued: not sent twice
+    Outgoing o;
+    TEST_ASSERT_TRUE(rig.poll(0, o));
+    TEST_ASSERT_EQUAL_HEX32(0xFFFFFFFF, o.to);
+    TEST_ASSERT_EQUAL(-1, o.chanSlot);
+    TEST_ASSERT_EQUAL(5, o.hopLimit);
+    Announce a;
+    TEST_ASSERT_TRUE(decodeAnnounce(o.payload, o.len, a));
+    TEST_ASSERT_EQUAL(2, a.count);
+    TEST_ASSERT_FALSE(rig.poll(10000, o));
+}
+
 void test_discover_list_announces_shared_channels() {
     Rig rig(0, 5);
     const uint32_t mine[] = {0x99999999, 0x22222222};
@@ -489,6 +504,7 @@ int main() {
     RUN_TEST(test_pack_empty_sends_one_last_packet);
     RUN_TEST(test_pack_never_exceeds_radio_limit);
     RUN_TEST(test_discover_yields_announce);
+    RUN_TEST(test_announce_broadcast_once);
     RUN_TEST(test_discover_list_announces_shared_channels);
     RUN_TEST(test_announce_beyond_ten_channels);
     RUN_TEST(test_ignores_beyond_max_hops);

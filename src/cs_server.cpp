@@ -159,6 +159,18 @@ void CsServer::buildAnnounce(const AnnounceTo &a, Announce &out) const {
     }
 }
 
+bool CsServer::announceBroadcast() {
+    AnnounceTo a{};
+    a.to = 0xFFFFFFFF;
+    a.hops = _cfg.maxHops;
+    for (int i = 0; i < _annLen; i++) {
+        if (_ann[i].to == a.to) return true;   // one already waiting
+    }
+    if (_annLen >= CS_ANNOUNCE_CAP) return false;
+    _ann[_annLen++] = a;
+    return true;
+}
+
 void CsServer::clearSlot(int slot) {
     int w = 0;
     for (int i = 0; i < _qLen; i++) if (_q[i].slot != slot) _q[w++] = _q[i];

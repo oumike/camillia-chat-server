@@ -65,6 +65,10 @@ public:
     bool poll(uint32_t nowMs, uint32_t nowUnix, bool timeValid, uint32_t nowUptimeSec,
               Outgoing &out);
 
+    // Queue an ANNOUNCE broadcast on the discovery channel (hop limit maxHops),
+    // listing the first channels as for a DISCOVER without a list. False if the queue is full.
+    bool announceBroadcast();
+
     // Forget queued and in-progress replies for a store slot (its messages were cleared).
     void clearSlot(int slot);
 

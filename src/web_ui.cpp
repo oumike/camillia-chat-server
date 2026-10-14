@@ -12,6 +12,7 @@ static std::function<String()> s_status;
 static MessageLister           s_listMessages;
 static MessageClearer          s_clearMessages;
 static std::function<String()> s_storageJson;
+static std::function<bool()>   s_announce;
 
 static const char *presetName(uint8_t i) { return i < PRESET_COUNT ? kPresets[i].channelName : nullptr; }
 static int presetIndex(const char *name) {
@@ -103,6 +104,8 @@ border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:point
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .btn.danger{color:var(--bad)}.btn.danger:hover{border-color:var(--bad)}
 .btn.sm{padding:6px 10px;font-size:13px}
+.btn.xs{padding:3px 10px;font-size:12px;border-radius:999px}
+.pills{align-items:center}
 .icon{font:inherit;width:36px;height:36px;flex:none;border-radius:9px;border:1px solid var(--line);background:var(--card);
 color:var(--dim);cursor:pointer;display:grid;place-items:center}
 .icon:hover{color:var(--accent);border-color:var(--accent)}.icon.del:hover{color:var(--bad);border-color:var(--bad)}
@@ -201,6 +204,9 @@ for(const b of document.querySelectorAll('nav.tabs button'))b.onclick=()=>show(b
 $('ch').onchange=load;$('refresh').onclick=load;
 $('clear1').onclick=()=>$('ch').value!==''&&clr($('ch').value,'#'+$('ch').selectedOptions[0].text);
 $('clearAll').onclick=()=>clr('all','every channel');
+$('announce').onclick=async()=>{const b=$('announce');let ok=false;b.disabled=true;
+try{ok=(await fetch('/announce',{method:'POST'})).ok}catch(e){}
+b.textContent=ok?'Announcement queued':'Could not queue';setTimeout(()=>{b.textContent='Send announcement';b.disabled=false},3000)};
 // Channel editor
 const cc=document.querySelector('[name=chanCount]'),rowsEl=[...document.querySelectorAll('.chan')],MAXC=rowsEl.length;
 function keyLen(v){v=v.trim().replace(/=+$/,'');if(!v)return 0;if(!/^[A-Za-z0-9+/]+$/.test(v))return-1;return Math.floor(v.length*6/8)}
@@ -255,7 +261,9 @@ static String renderPage(const Settings &c, const char *error) {
     h += F("</style></head><body><header class=\"top\"><div class=\"wrap\"><div class=\"bar\"><div class=\"brand\">");
     h += kLogo;
     h += String("<div><b>Camillia Chat Server</b><small id=\"hdrNode\">") + esc(c.longName) + "</small></div></div>";
-    h += F("<div class=\"pills\"><span class=\"pill\" id=\"pIp\"><i></i><span>&hellip;</span></span>"
+    h += F("<div class=\"pills\"><button type=\"button\" class=\"btn xs\" id=\"announce\" "
+           "title=\"Broadcast this server's ANNOUNCE on the discovery channel\">Send announcement</button>"
+           "<span class=\"pill\" id=\"pIp\"><i></i><span>&hellip;</span></span>"
            "<span class=\"pill\" id=\"pMqtt\"><i></i><span>MQTT</span></span>"
            "<span class=\"pill\" id=\"pBatt\"><i></i><span>Battery</span></span>"
            "<span class=\"pill\" id=\"pVer\"><i></i><span></span></span></div></div>"
@@ -537,10 +545,16 @@ void webBegin(Settings *settings, std::function<void()> onSaved, std::function<S
     s_server.on("/ota/install", HTTP_POST, [] {
         s_server.send(otaRequestInstall() ? 202 : 409, "application/json", otaStatusJson());
     });
+    s_server.on("/announce", HTTP_POST, [] {
+        bool ok = s_announce && s_announce();
+        s_server.send(ok ? 202 : 503, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
+    });
     s_server.on("/status", HTTP_GET, [] {
         s_server.send(200, "application/json", s_status ? s_status() : String("{}"));
     });
     s_server.begin();
 }
+
+void webSetAnnounce(std::function<bool()> announce) { s_announce = announce; }
 
 void webLoop() { s_server.handleClient(); }

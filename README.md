@@ -56,6 +56,10 @@ turned off and the page is reached at the device's home-network IP, shown in
 the display footer. If the home network stays down for 30 seconds, the access
 point comes back.
 
+**Send announcement** in the page header, left of the IP address, broadcasts an ANNOUNCE on the
+discovery channel, up to the configured max hops, so camillia nodes that are
+searching pick up this server without waiting for their next DISCOVER.
+
 ## OTA updates
 
 The **Firmware** card in the web config checks for and installs new stable
