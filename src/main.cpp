@@ -16,6 +16,8 @@
 #include "mesh_proto.h"
 #include "node_identity.h"
 #include "node_names.h"
+#include "peer_keys.h"
+#include "pki_identity.h"
 #include "ota_update.h"
 #include "persistence.h"
 #include "radio_link.h"
@@ -24,7 +26,8 @@
 #include "status_display.h"
 #include "web_ui.h"
 
-// mesh_proto externs normally owned by camillia-mt's UI layer. PKI is unused.
+// mesh_proto externs normally owned by camillia-mt's UI layer. The key pair is
+// pkiBegin()'s.
 uint8_t myPubKey[32]  = {0};
 uint8_t myPrivKey[32] = {0};
 uint8_t myDeviceRole  = 0;
@@ -38,6 +41,7 @@ static CsServer      s_server;
 static AirtimeBudget s_airtime;
 static uint8_t       s_dutyLimitPct = 100;    // 10 in EU regions
 static NodeNames     s_names;
+static PeerKeys      s_peerKeys;
 static ActivityLog   s_activity;
 
 // Last packet heard on LoRa, for the display's signal line.
@@ -413,10 +417,25 @@ static String helpText() {
     return t;
 }
 
+// Routing ACK for a packet addressed here that asked for one, so the sender's
+// DM shows as delivered. On the channel it came in on; a PKI packet has none,
+// so the primary, as camillia-mt and Meshtastic do.
+static void sendAck(const MeshPacket &pkt, int slot) {
+    if (!(pkt.hdr.flags & (1 << 3)) || pkt.hdr.to != s_nodeId) return;
+    uint8_t buf[64];
+    size_t n = encodeRouting(pkt.hdr.id, s_nodeId, 0, buf, sizeof buf);
+    if (!n || !s_airtime.canSend(millis(), airMsFor(n), s_dutyLimitPct)) return;
+    if (radioSendData(pkt.hdr.from, slot, s_settings.maxHops, buf, n)) s_airtime.record(millis(), airMsFor(n));
+}
+
 static bool handleDmCommand(const MeshPacket &pkt) {
     if (pkt.portnum != TEXT_MESSAGE_APP || pkt.hdr.to != s_nodeId || pkt.hdr.from == s_nodeId) return false;
-    int slot = slotForPacket(pkt);
+    // camillia-mt sends DMs PKI-encrypted only (chanIdx -2); stock Meshtastic
+    // falls back to a channel key when it has no key for us.
+    const bool pki = pkt.chanIdx == -2;
+    int slot = pki ? 0 : slotForPacket(pkt);
     if (slot == -2) return false;
+    sendAck(pkt, slot);
     char text[sizeof pkt.payload + 1];
     memcpy(text, pkt.payload, pkt.payloadLen);
     text[pkt.payloadLen] = 0;
@@ -428,20 +447,66 @@ static bool handleDmCommand(const MeshPacket &pkt) {
         uint8_t buf[240];
         size_t n = encodeTextMessageUnicast(reply.substring(0, 200).c_str(), s_nodeId, pkt.hdr.from, buf, sizeof buf);
         if (!n) return true;
-        bool ok = s_airtime.canSend(millis(), airMsFor(n), s_dutyLimitPct) &&
-                  radioSendData(pkt.hdr.from, slot, s_settings.maxHops, buf, n);
-        if (ok) s_airtime.record(millis(), airMsFor(n));
-        Serial.printf("[cs] %s DM from !%08x ch%d: reply %s\n", c.name, (unsigned)pkt.hdr.from, slot,
-                      ok ? "ok" : "FAILED");
+        // Answered the way it was asked: a PKI DM gets a PKI reply. Its sender's
+        // key is known, or the DM could not have been decrypted.
+        const size_t airLen = pki ? n + 12 : n;
+        bool ok = s_airtime.canSend(millis(), airMsFor(airLen), s_dutyLimitPct) &&
+                  (pki ? radioSendDataPki(pkt.hdr.from, s_peerKeys.find(pkt.hdr.from), s_settings.maxHops, buf, n)
+                       : radioSendData(pkt.hdr.from, slot, s_settings.maxHops, buf, n));
+        if (ok) s_airtime.record(millis(), airMsFor(airLen));
+        Serial.printf("[cs] %s DM from !%08x %s%d: reply %s\n", c.name, (unsigned)pkt.hdr.from,
+                      pki ? "pki/ch" : "ch", slot, ok ? "ok" : "FAILED");
         return true;
     }
     return false;
 }
 
+// Our NODEINFO, public key included, sent to one node. At most once per node
+// per 30 s: a node asking for it repeats itself every 5 s while its user keeps
+// trying to send.
+static void sendNodeInfoTo(uint32_t to, int slot, bool wantResponse, const char *why) {
+    static uint32_t lastTo = 0, lastMs = 0;
+    const uint32_t now = millis();
+    if (to == lastTo && now - lastMs < 30000) return;
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    uint8_t buf[160];
+    size_t n = encodeNodeInfo(s_nodeId, s_settings.longName, s_settings.shortName, mac, buf, sizeof buf,
+                              wantResponse);
+    if (!n || !s_airtime.canSend(now, airMsFor(n), s_dutyLimitPct)) return;
+    bool ok = radioSendData(to, slot, s_settings.maxHops, buf, n);
+    if (ok) {
+        s_airtime.record(now, airMsFor(n));
+        lastTo = to;
+        lastMs = now;
+    }
+    Serial.printf("[cs] nodeinfo to !%08x ch%d (%s): %s\n", (unsigned)to, slot, why, ok ? "sent" : "FAILED");
+}
+
+// A node that wants to DM us and has no key for us asks with a NODEINFO
+// addressed here, want_response set (camillia-mt does this when a DM fails for
+// want of a key). Answered on the same channel, so the key arrives without
+// waiting up to three hours for the periodic broadcast.
+static void answerNodeInfoRequest(const MeshPacket &pkt) {
+    if (!pkt.wantResponse || pkt.hdr.to != s_nodeId) return;
+    int slot = slotForPacket(pkt);
+    if (slot != -2) sendNodeInfoTo(pkt.hdr.from, slot, false, "requested");
+}
+
+// A PKI DM we cannot open: its sender's key is not in s_peerKeys (it is kept in
+// RAM, so a restart forgets them all). Ask the sender for its NODEINFO, on the
+// primary as camillia-mt sends its own; its answer carries the key, and the
+// next DM it sends gets through.
+static void onPkiNoKey(uint32_t from) { sendNodeInfoTo(from, 0, true, "need its key"); }
+
 static void ingest(const MeshPacket &pkt, MsgSource source) {
     if (pkt.portnum == NODEINFO_APP && pkt.hdr.from != s_nodeId) {
         UserInfo u;
-        if (decodeUser(pkt.payload, pkt.payloadLen, u)) s_names.update(pkt.hdr.from, u.longName, u.shortName, millis());
+        if (decodeUser(pkt.payload, pkt.payloadLen, u)) {
+            s_names.update(pkt.hdr.from, u.longName, u.shortName, millis());
+            if (u.hasPubKey) s_peerKeys.update(pkt.hdr.from, u.pubKey, millis());
+        }
+        if (source == SRC_LORA) answerNodeInfoRequest(pkt);
     }
     int slot = slotForPacket(pkt);
     if (pkt.portnum != TEXT_MESSAGE_APP || pkt.hdr.to != 0xFFFFFFFF || slot < 0) return;
@@ -468,6 +533,8 @@ void setup() {
                   s_settings.shortName);
 
     s_names.begin(ps_malloc);   // no PSRAM: names just stay hex
+    s_peerKeys.begin(ps_malloc);   // no PSRAM: no keys, so channel-key DMs only
+    pkiBegin();
     displayBegin();
     batteryBegin();
     wifiBegin();
@@ -484,6 +551,7 @@ void setup() {
     persistBegin();
     persistLoadAll(s_stores, s_settings);
 
+    radioSetPeerKeys([](uint32_t id) { return s_peerKeys.find(id); }, onPkiNoKey);
     radioBegin(s_settings, s_nodeId);
     mqttBegin(s_settings, s_nodeId, [](const MeshPacket &p) { ingest(p, SRC_MQTT); });
     serverBegin();

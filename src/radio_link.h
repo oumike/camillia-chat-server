@@ -8,13 +8,22 @@ constexpr int DISCOVERY_SLOT = SETTINGS_MAX_CHANNELS;   // CHANNEL_KEYS index of
 constexpr uint32_t PORT_CHAT_SERVER = 256;   // Meshtastic PRIVATE_APP
 
 bool radioBegin(const Settings &s, uint32_t myNodeId);
-// Decrypted packets only.
+// Decrypted packets only. A PKI packet (header channel 0) addressed to this
+// node is decrypted with the sender's key from keyFor, which returns nullptr for
+// a node whose NODEINFO has not been heard; it comes back with chanIdx -2. One
+// that cannot be opened for want of a key is passed to onNoKey instead.
+using PeerKeyFn = const uint8_t *(*)(uint32_t nodeId);
+using NoKeyFn   = void (*)(uint32_t nodeId);
+void radioSetPeerKeys(PeerKeyFn keyFor, NoKeyFn onNoKey);
 bool radioPoll(MeshPacket &pkt);
 // chanSlot -1 = discovery channel. hopLimit is both hop_limit and hop_start.
 bool radioSend(uint32_t to, int chanSlot, uint8_t hopLimit, uint32_t portnum,
                const uint8_t *payload, size_t len);
 // Send an already-encoded Meshtastic Data message.
 bool radioSendData(uint32_t to, int chanSlot, uint8_t hopLimit, const uint8_t *data, size_t len);
+// The same, PKI-encrypted to `to`, whose public key is toKey.
+bool radioSendDataPki(uint32_t to, const uint8_t toKey[32], uint8_t hopLimit, const uint8_t *data,
+                      size_t len);
 uint8_t hopsTravelled(const MeshHdr &hdr);
 // Store slot a decrypted packet belongs to: 0..chanCount-1, -1 for discovery, -2 if
 // neither. The header's channel hash must match the key's channel too: the mesh

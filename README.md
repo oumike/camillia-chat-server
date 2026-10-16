@@ -48,6 +48,13 @@ Direct-message the server on any of its channels and it replies to you:
 - `help` — list the commands
 - `status` — uptime, battery, MQTT, airtime and stored messages per channel
 
+The server has its own Curve25519 key pair, made on first boot and kept in NVS,
+and advertises the public key in its NODEINFO. DMs encrypted to that key (PKI,
+which camillia-mt requires) are answered the same way; channel-key DMs, as
+older Meshtastic clients send, are answered on their channel. A node that has
+no key for the server yet gets it by asking: camillia-mt does this when the
+first DM fails, and the next one goes through.
+
 ## Web config
 
 Join the open `camillia-cs-<short name>` access point and browse to

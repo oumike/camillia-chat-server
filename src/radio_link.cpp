@@ -4,8 +4,10 @@
 #include "mesh_channel_plan.h"
 #include "mesh_radio.h"
 
-static uint32_t s_myNodeId = 0;
-static int      s_chanCount = 0;
+static uint32_t  s_myNodeId = 0;
+static int       s_chanCount = 0;
+static PeerKeyFn s_keyFor = nullptr;
+static NoKeyFn   s_onNoKey = nullptr;
 
 static void setSlot(int i, const char *name, const uint8_t *key, uint8_t keyLen, uint8_t role) {
     ChannelKey &ck = CHANNEL_KEYS[i];
@@ -44,9 +46,45 @@ bool radioBegin(const Settings &s, uint32_t myNodeId) {
     return ok;
 }
 
+void radioSetPeerKeys(PeerKeyFn keyFor, NoKeyFn onNoKey) {
+    s_keyFor = keyFor;
+    s_onNoKey = onNoKey;
+}
+
+// The mesh layer leaves header-channel-0 packets for the caller (camillia-mt's
+// handleRx does the same): only one addressed here, from a node whose key we
+// hold, can be ours to open.
+static bool decryptPkiForUs(MeshPacket &pkt) {
+    if (pkt.hdr.channel != 0 || pkt.hdr.to != s_myNodeId || pkt.rawLen <= 12 || !s_keyFor) return false;
+    const uint8_t *key = s_keyFor(pkt.hdr.from);
+    if (!key) {
+        Serial.printf("[cs] PKI packet from !%08x: no key for it yet\n", (unsigned)pkt.hdr.from);
+        if (s_onNoKey) s_onNoKey(pkt.hdr.from);
+        return false;
+    }
+    uint8_t plain[256];
+    size_t plainLen = 0;
+    if (!decryptPki(pkt.hdr, pkt.rawCipher, pkt.rawLen, key, plain, plainLen)) {
+        Serial.printf("[cs] PKI packet from !%08x: decrypt failed\n", (unsigned)pkt.hdr.from);
+        return false;
+    }
+    const uint8_t *payPtr = nullptr;
+    size_t payLen = 0;
+    if (!decodeData(plain, plainLen, pkt.portnum, payPtr, payLen, pkt.requestId, pkt.wantResponse,
+                    &pkt.dataDest, &pkt.hasDataDest, &pkt.dataSource, &pkt.hasDataSource) ||
+        !payPtr || payLen > sizeof(pkt.payload)) {
+        return false;
+    }
+    memcpy(pkt.payload, payPtr, payLen);
+    pkt.payloadLen = payLen;
+    pkt.chanIdx = -2;
+    pkt.decrypted = true;
+    return true;
+}
+
 bool radioPoll(MeshPacket &pkt) {
     while (Radio.pollRx(pkt)) {
-        if (pkt.decrypted) return true;
+        if (pkt.decrypted || decryptPkiForUs(pkt)) return true;
     }
     return false;
 }
@@ -112,6 +150,25 @@ bool radioSendData(uint32_t to, int chanSlot, uint8_t hopLimit, const uint8_t *d
         return false;
     memcpy(frame, &hdr, sizeof(hdr));
     return Radio.transmit(frame, sizeof(hdr) + len);
+}
+
+bool radioSendDataPki(uint32_t to, const uint8_t toKey[32], uint8_t hopLimit, const uint8_t *data,
+                      size_t len) {
+    // Ciphertext plus the 8-byte tag and 4-byte extra nonce encryptPki appends.
+    uint8_t frame[sizeof(MeshHdr) + 256];
+    if (!toKey || len + 12 > 256 - sizeof(MeshHdr)) return false;
+
+    MeshHdr hdr = {};
+    hdr.to = to;
+    hdr.from = s_myNodeId;
+    hdr.id = nextMeshPacketId();
+    hdr.channel = 0;   // PKI marker
+    uint8_t h = hopLimit & 0x07;
+    hdr.flags = (uint8_t)(h | (h << 5));
+    hdr.relay_node = (uint8_t)(s_myNodeId & 0xFF);
+    if (!encryptPki(hdr.id, s_myNodeId, toKey, data, len, frame + sizeof(MeshHdr))) return false;
+    memcpy(frame, &hdr, sizeof(hdr));
+    return Radio.transmit(frame, sizeof(hdr) + len + 12);
 }
 
 bool radioSend(uint32_t to, int chanSlot, uint8_t hopLimit, uint32_t portnum,
