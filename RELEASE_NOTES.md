@@ -7,3 +7,8 @@
 - Lowering messages per channel drops each channel's oldest messages beyond the new limit at the next restart.
 - The on-device health page and the web storage view now show the configured per-channel capacity instead of a fixed 250.
 - Existing settings carry over on upgrade, and messages per channel starts at 250.
+
+
+### Update (v0.5.13)
+### New
+- The web config's firmware section now has a "Release notes" link next to the installed version, which opens that version's release page on GitHub.
