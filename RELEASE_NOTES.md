@@ -1,6 +1,9 @@
-### Fixed
-- DMs from camillia-mt nodes (`help`, `status`) now reach the server. camillia-mt only sends DMs encrypted to the recipient's public key, and the server had none, so every DM failed on the node with "TX failed". The server now has its own key pair, made on first boot and kept across restarts, advertises it in its NODEINFO, and answers encrypted DMs the same way. The first DM from a node that has not yet heard the server's key still fails once; that attempt fetches the key and the next one goes through.
+### New
+- Messages kept per channel can now be set from 10 to 1000 (default 250) in a new Storage card in the web UI, or under `storage: messagesPerChannel` in exported and imported settings.
+- Saving or importing settings is refused, with an explanation, if the chosen channel count and messages per channel would not fit in the device's PSRAM or flash.
+- Setting "Dimmed brightness" to 0 now turns the screen fully off when it dims, and it wakes on the current page.
 
 ### Changed
-- The server answers a NODEINFO request addressed to it right away, so a node that needs its key no longer waits for the three-hourly broadcast.
-- DMs to the server are acknowledged, so they show as delivered on the sender.
+- Lowering messages per channel drops each channel's oldest messages beyond the new limit at the next restart.
+- The on-device health page and the web storage view now show the configured per-channel capacity instead of a fixed 250.
+- Existing settings carry over on upgrade, and messages per channel starts at 250.
