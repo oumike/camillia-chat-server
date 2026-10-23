@@ -230,7 +230,7 @@ window.addEventListener('beforeunload',e=>{if($('savebar').classList.contains('d
 form.addEventListener('submit',()=>form.dataset.sub=1);
 // Firmware
 async function fw(){try{const o=await (await fetch('/ota')).json();
-$('fwCur').textContent='v'+o.current;$('fwLatest').textContent=o.latest||'not checked';
+$('fwCur').textContent='v'+o.current;$('fwNotes').href='https://github.com/oumike/camillia-chat-server/releases/tag/v'+o.current;$('fwNotes').hidden=false;$('fwLatest').textContent=o.latest||'not checked';
 $('fwChecked').textContent=o.checkedAgoSec==null?'':'checked '+dur(o.checkedAgoSec)+' ago';
 const busy=['checking','downloading','verifying','installed'].includes(o.state);
 const msg=!o.supported?'Updates need the release partition layout: flash a release image over USB once.':
@@ -364,7 +364,8 @@ static String renderPage(const Settings &c, const char *error) {
     h += F("<div class=\"card\"><h2><span class=\"ico\">&#8679;</span>Firmware</h2>"
            "<p class=\"sub\">Signed releases from the camillia update server. Each image is checked "
            "against the built-in key before it is installed.</p><div class=\"fw\">"
-           "<div class=\"kv\"><span>Installed</span><b id=\"fwCur\">&hellip;</b></div>"
+           "<div class=\"kv\"><span>Installed</span><b id=\"fwCur\">&hellip;</b>"
+           "<small><a id=\"fwNotes\" target=\"_blank\" rel=\"noopener\" hidden>Release notes</a></small></div>"
            "<div class=\"kv\"><span>Latest release</span><b id=\"fwLatest\">&hellip;</b><small id=\"fwChecked\"></small></div>"
            "<div class=\"kv\"><span>Status</span><b id=\"fwState\">&hellip;</b></div></div>"
            "<div class=\"prog\" id=\"fwProg\" hidden><i></i></div>"
