@@ -204,14 +204,44 @@ void test_blob_current_and_bad() {
     memcpy(blob, &a, sizeof blob);
     a.otaAutoInstall = true;
     memcpy(blob, &a, sizeof blob);
-    TEST_ASSERT_TRUE(settingsFromBlob(blob, sizeof blob, 7, b));
+    TEST_ASSERT_TRUE(settingsFromBlob(blob, sizeof blob, 8, b));
     TEST_ASSERT_EQUAL_STRING("Cur", b.longName);
     TEST_ASSERT_EQUAL(77, b.displayPageSec);
     TEST_ASSERT_TRUE(b.otaAutoInstall);
-    TEST_ASSERT_FALSE(settingsFromBlob(blob, sizeof blob - 1, 7, b));
+    TEST_ASSERT_FALSE(settingsFromBlob(blob, sizeof blob - 1, 8, b));
     TEST_ASSERT_FALSE(settingsFromBlob(blob, sizeof blob, 6, b));
     TEST_ASSERT_FALSE(settingsFromBlob(blob, sizeof blob, 4, b));
     TEST_ASSERT_FALSE(settingsFromBlob(blob, SETTINGS_V4_BLOB_LEN, 3, b));
+}
+
+void test_upgrade_v7_blob() {
+    Settings a, b;
+    settingsDefaults(a, 1);
+    strcpy(a.longName, "Seven");
+    a.otaAutoInstall = true;
+    a.msgsPerChannel = 0xBEEF;   // not part of a v7 blob
+    memset(&b, 0xEE, sizeof b);
+    TEST_ASSERT_TRUE(settingsFromBlob((const uint8_t *)&a, SETTINGS_V7_BLOB_LEN, 7, b));
+    TEST_ASSERT_EQUAL_STRING("Seven", b.longName);
+    TEST_ASSERT_TRUE(b.otaAutoInstall);
+    TEST_ASSERT_EQUAL(250, b.msgsPerChannel);
+    TEST_ASSERT_FALSE(settingsFromBlob((const uint8_t *)&a, sizeof(Settings), 7, b));
+}
+
+void test_msgs_per_channel_range() {
+    Settings s;
+    settingsDefaults(s, 1);
+    char err[96] = "";
+    TEST_ASSERT_EQUAL(250, s.msgsPerChannel);
+    s.msgsPerChannel = 9;
+    TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
+    TEST_ASSERT_NOT_NULL(strstr(err, "Messages per channel"));
+    s.msgsPerChannel = 1001;
+    TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
+    s.msgsPerChannel = 10;
+    TEST_ASSERT_TRUE(settingsValidate(s, err, sizeof err));
+    s.msgsPerChannel = 1000;
+    TEST_ASSERT_TRUE(settingsValidate(s, err, sizeof err));
 }
 
 int main() {
@@ -225,6 +255,8 @@ int main() {
     RUN_TEST(test_upgrade_v4_blob);
     RUN_TEST(test_upgrade_v5_blob);
     RUN_TEST(test_upgrade_v6_blob);
+    RUN_TEST(test_upgrade_v7_blob);
     RUN_TEST(test_blob_current_and_bad);
+    RUN_TEST(test_msgs_per_channel_range);
     return UNITY_END();
 }

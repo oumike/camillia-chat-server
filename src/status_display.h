@@ -29,6 +29,7 @@ struct DisplayStatus {
     uint8_t     dutyLimitPct;
     int         chanCount;
     int         chanCounts[CS_MAX_CHANNELS];
+    int         chanCapacity;   // messages kept per channel
     uint32_t    flashUsedKB, flashTotalKB, psramFreeKB;
     // Newest-first copies for pages 2 and 3; only called when the page is shown.
     int (*newestMessages)(StoredMsg *out, int8_t *slots, int max);

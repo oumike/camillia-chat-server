@@ -4,7 +4,10 @@
 #include <stdint.h>
 
 constexpr int CS_MAX_CHANNELS     = 20;
-constexpr int CS_MSGS_PER_CHANNEL = 250;
+// Messages kept per channel: set at boot from Settings::msgsPerChannel.
+constexpr int CS_MSGS_PER_CHANNEL_MIN     = 10;
+constexpr int CS_MSGS_PER_CHANNEL_MAX     = 1000;
+constexpr int CS_MSGS_PER_CHANNEL_DEFAULT = 250;
 constexpr int CS_MAX_TEXT         = 200;
 
 enum MsgSource : uint8_t { SRC_LORA = 0, SRC_MQTT = 1 };
@@ -25,8 +28,9 @@ public:
     using AllocFn  = void *(*)(size_t);
     using RandomFn = uint32_t (*)();
 
-    // Allocates the ring once and starts empty with a fresh random epoch.
-    bool begin(AllocFn alloc, RandomFn random);
+    // Allocates a ring of `capacity` messages once and starts empty with a
+    // fresh random epoch.
+    bool begin(AllocFn alloc, RandomFn random, int capacity = CS_MSGS_PER_CHANNEL_DEFAULT);
 
     // Returns false for a duplicate (same from + packetId still held).
     // Text is cut to <= 200 bytes on a UTF-8 boundary.
@@ -38,6 +42,7 @@ public:
     uint32_t headSeq() const { return _count ? at(_count - 1).seq : _lastSeq; }
     uint32_t tailSeq() const { return _count ? at(0).seq : _lastSeq + 1; }
     int      count() const   { return _count; }
+    int      capacity() const { return _cap; }
 
     // Seq of the held message (from, packetId), or 0 if not held.
     uint32_t findSeqAfterAnchor(uint32_t from, uint32_t packetId) const;
@@ -51,22 +56,25 @@ public:
 
     // Bytes of message text held, and the ring's fixed allocation.
     size_t textBytes() const;
-    static size_t ramBytes() { return sizeof(StoredMsg) * CS_MSGS_PER_CHANNEL; }
+    static size_t ramBytes(int capacity) { return sizeof(StoredMsg) * (size_t)capacity; }
+    size_t ramBytes() const { return ramBytes(_cap); }
 
     bool     dirty() const         { return _dirty; }
     uint32_t addsSinceSave() const { return _addsSinceSave; }
     void     markSaved()           { _dirty = false; _addsSinceSave = 0; }
 
     // "CSS1" | epoch | lastSeq | count(u16) | records | CRC32. deserialize()
-    // leaves the store untouched and returns false on any inconsistency.
-    static size_t maxSerializedSize();
+    // leaves the store untouched and returns false on any inconsistency; a file
+    // holding more than capacity() messages loads its newest capacity().
+    static size_t maxSerializedSize(int capacity = CS_MSGS_PER_CHANNEL_DEFAULT);
     size_t serialize(uint8_t *out, size_t cap) const;
     bool   deserialize(const uint8_t *in, size_t len);
 
 private:
-    const StoredMsg &at(int i) const { return _ring[(_start + i) % CS_MSGS_PER_CHANNEL]; }
+    const StoredMsg &at(int i) const { return _ring[(_start + i) % _cap]; }
 
     StoredMsg *_ring = nullptr;
+    int        _cap = 0;
     RandomFn   _random = nullptr;
     int        _start = 0;
     int        _count = 0;

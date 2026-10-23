@@ -156,6 +156,19 @@ void test_ota_auto_install_roundtrip() {
     TEST_ASSERT_FALSE(settingsFromYaml("ota:\n  autoInstall: yes\n", b, kMap, err, sizeof err));
 }
 
+void test_messages_per_channel_roundtrip() {
+    Settings a, b;
+    settingsDefaults(a, 1);
+    a.msgsPerChannel = 600;
+    std::string y = settingsToYaml(a, kMap);
+    settingsDefaults(b, 1);
+    char err[96] = "";
+    TEST_ASSERT_TRUE_MESSAGE(settingsFromYaml(y.c_str(), b, kMap, err, sizeof err), err);
+    TEST_ASSERT_EQUAL(600, b.msgsPerChannel);
+    TEST_ASSERT_FALSE(settingsFromYaml("storage:\n  messagesPerChannel: 5\n", b, kMap, err, sizeof err));
+    TEST_ASSERT_EQUAL(600, b.msgsPerChannel);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_yaml_round_trip);
@@ -166,5 +179,6 @@ int main() {
     RUN_TEST(test_display_roundtrip);
     RUN_TEST(test_display_bad_value);
     RUN_TEST(test_ota_auto_install_roundtrip);
+    RUN_TEST(test_messages_per_channel_roundtrip);
     return UNITY_END();
 }

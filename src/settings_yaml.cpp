@@ -99,6 +99,8 @@ std::string settingsToYaml(const Settings &s, const YamlPresetMap &presets) {
     kv(y, "  ", "batchSize", num(s.batchSize));
     kv(y, "  ", "packetGapMs", num(s.packetGapMs));
     kv(y, "  ", "maxHops", num(s.maxHops));
+    y += "storage:\n";
+    kv(y, "  ", "messagesPerChannel", num(s.msgsPerChannel));
     y += "mqtt:\n";
     kv(y, "  ", "enabled", s.mqttEnabled ? "true" : "false");
     kv(y, "  ", "host", quote(s.mqttHost));
@@ -192,6 +194,11 @@ bool settingsFromYaml(const char *text, Settings &out, const YamlPresetMap &pres
             if (k == "batchSize") { if (!toLong(v, 0, 255, n)) return bad("batchSize"); s.batchSize = (uint8_t)n; }
             else if (k == "packetGapMs") { if (!toLong(v, 0, 65535, n)) return bad("packetGapMs"); s.packetGapMs = (uint16_t)n; }
             else if (k == "maxHops") { if (!toLong(v, 0, 255, n)) return bad("maxHops"); s.maxHops = (uint8_t)n; }
+        } else if (section == "storage") {
+            if (k == "messagesPerChannel") {
+                if (!toLong(v, 0, 65535, n)) return bad("messagesPerChannel");
+                s.msgsPerChannel = (uint16_t)n;
+            }
         } else if (section == "mqtt") {
             if (k == "enabled") {
                 if (v != "true" && v != "false") return bad("enabled");

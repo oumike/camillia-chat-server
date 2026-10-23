@@ -15,6 +15,7 @@ constexpr uint32_t kTouchSlowMs = 200;   // a healthy CHSC6X read takes ~1 ms; a
 LGFX_V4Exp s_lcd;
 bool       s_touchOff = false;
 bool       s_panelUp = false;   // lcd.init() succeeded; dhalOff() may then blank the backlight
+bool       s_asleep = false;    // backlight 0 and the ST7789 in sleep mode
 uint8_t    s_touchFails = 0;
 
 }  // namespace
@@ -71,7 +72,20 @@ bool dhalTouch(int16_t &x, int16_t &y) {
     return true;
 }
 
-void dhalBacklight(uint8_t level) { s_lcd.setBrightness(level); }
+// Level 0 turns the screen off: backlight off and the panel asleep. LVGL keeps
+// drawing into its RAM, so the next level shows the current page.
+void dhalBacklight(uint8_t level) {
+    if (level == 0) {
+        if (!s_asleep) s_lcd.sleep();
+        s_asleep = true;
+        return;
+    }
+    if (s_asleep) {
+        s_lcd.wakeup();
+        s_asleep = false;
+    }
+    s_lcd.setBrightness(level);
+}
 
 void dhalOff() {
     if (s_panelUp) s_lcd.setBrightness(0);   // don't leave a lit black panel

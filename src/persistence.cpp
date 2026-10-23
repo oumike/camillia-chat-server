@@ -7,14 +7,40 @@ static uint8_t *s_buf = nullptr;
 static size_t   s_bufCap = 0;
 static uint32_t s_lastSaveMs[CS_MAX_CHANNELS] = {0};
 static bool     s_ok = false;
+static size_t   s_psramBudget = 0;
+
+// PSRAM left for everything allocated after the stores (OTA, web, display).
+static constexpr size_t kPsramReserve = 128 * 1024;
 
 static String path(int i, const char *ext) { return String("/cs/ch") + i + ext; }
 static void save(ChannelStore &st, int i);
 
-bool persistBegin() {
+void persistNoteFreePsram() { s_psramBudget = ESP.getFreePsram(); }
+
+bool persistFits(const Settings &s, char *err, size_t cap) {
+    const int n = s.chanCount, msgs = s.msgsPerChannel;
+    const size_t file = ChannelStore::maxSerializedSize(msgs);
+    // Rings, the save buffer, and the web UI's message-list buffer.
+    const size_t ram = (size_t)(n + 1) * ChannelStore::ramBytes(msgs) + file + kPsramReserve;
+    if (s_psramBudget && ram > s_psramBudget) {
+        snprintf(err, cap, "%d channels x %d messages need %u KB of PSRAM; %u KB available", n, msgs,
+                 (unsigned)(ram / 1024), (unsigned)(s_psramBudget / 1024));
+        return false;
+    }
+    // Every channel full, plus one .tmp while saving; LittleFS keeps ~10% for metadata.
+    const size_t flash = (size_t)(n + 1) * file, total = s_ok ? LittleFS.totalBytes() : 0;
+    if (total && flash > total / 10 * 9) {
+        snprintf(err, cap, "%d channels x %d messages need up to %u KB of flash; %u KB available", n, msgs,
+                 (unsigned)(flash / 1024), (unsigned)(total / 10 * 9 / 1024));
+        return false;
+    }
+    return true;
+}
+
+bool persistBegin(int capacity) {
     s_ok = LittleFS.begin(true, "/littlefs", 10, "littlefs");
     if (s_ok && !LittleFS.exists("/cs")) LittleFS.mkdir("/cs");
-    s_bufCap = ChannelStore::maxSerializedSize();
+    s_bufCap = ChannelStore::maxSerializedSize(capacity);
     s_buf = (uint8_t *)ps_malloc(s_bufCap);
     Serial.printf("[cs] littlefs %s, %u/%u KB used\n", s_ok ? "ok" : "FAILED",
                   s_ok ? (unsigned)(LittleFS.usedBytes() / 1024) : 0,

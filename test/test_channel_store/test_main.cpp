@@ -49,7 +49,7 @@ void test_store_dedupes_relayed_and_mqtt_copies() {
 void test_ring_drops_oldest() {
     ChannelStore *s = fresh();
     for (uint32_t i = 1; i <= 260; i++) TEST_ASSERT_TRUE(addMsg(*s, 7, i, "m"));
-    TEST_ASSERT_EQUAL(CS_MSGS_PER_CHANNEL, s->count());
+    TEST_ASSERT_EQUAL(CS_MSGS_PER_CHANNEL_DEFAULT, s->count());
     TEST_ASSERT_EQUAL_UINT32(11, s->tailSeq());
     TEST_ASSERT_EQUAL_UINT32(260, s->headSeq());
     // The evicted message (from 7, id 1) is no longer held, so it is accepted again.
@@ -167,7 +167,7 @@ void test_text_bytes_and_ram() {
     addMsg(*s, 1, 1, "hello");
     addMsg(*s, 1, 2, "hi");
     TEST_ASSERT_EQUAL(7, s->textBytes());
-    TEST_ASSERT_EQUAL(sizeof(StoredMsg) * CS_MSGS_PER_CHANNEL, ChannelStore::ramBytes());
+    TEST_ASSERT_EQUAL(sizeof(StoredMsg) * CS_MSGS_PER_CHANNEL_DEFAULT, s->ramBytes());
     s->reset(9);
     TEST_ASSERT_EQUAL(0, s->textBytes());
     delete s;
@@ -183,6 +183,35 @@ void test_reload_keeps_sequence_contiguous() {
     TEST_ASSERT_EQUAL_UINT32(30, t->headSeq());
     TEST_ASSERT_TRUE(t->add(9, 1, "after reboot", 12, 0, 1, 0));
     TEST_ASSERT_EQUAL_UINT32(31, t->headSeq());
+    delete s; delete t;
+}
+
+void test_configured_capacity_drops_oldest() {
+    ChannelStore *s = new ChannelStore();
+    TEST_ASSERT_TRUE(s->begin(malloc, fakeRandom, 10));
+    for (uint32_t i = 1; i <= 25; i++) TEST_ASSERT_TRUE(addMsg(*s, 7, i, "m"));
+    TEST_ASSERT_EQUAL(10, s->count());
+    TEST_ASSERT_EQUAL_UINT32(16, s->tailSeq());
+    TEST_ASSERT_EQUAL_UINT32(25, s->headSeq());
+    delete s;
+}
+
+void test_reload_into_smaller_store_keeps_newest() {
+    ChannelStore *s = fresh();
+    for (uint32_t i = 1; i <= 30; i++) addMsg(*s, 3, i, "x");
+    std::vector<uint8_t> buf(ChannelStore::maxSerializedSize());
+    size_t n = s->serialize(buf.data(), buf.size());
+    ChannelStore *t = new ChannelStore();
+    TEST_ASSERT_TRUE(t->begin(malloc, fakeRandom, 10));
+    TEST_ASSERT_TRUE(t->deserialize(buf.data(), n));
+    TEST_ASSERT_EQUAL(10, t->count());
+    TEST_ASSERT_EQUAL_UINT32(21, t->tailSeq());
+    TEST_ASSERT_EQUAL_UINT32(30, t->headSeq());
+    TEST_ASSERT_EQUAL_UINT32(s->epoch(), t->epoch());
+    TEST_ASSERT_TRUE(t->dirty());
+    TEST_ASSERT_TRUE(t->add(9, 1, "next", 4, 0, 1, 0));
+    TEST_ASSERT_EQUAL_UINT32(31, t->headSeq());
+    TEST_ASSERT_EQUAL_UINT32(22, t->tailSeq());
     delete s; delete t;
 }
 
@@ -247,6 +276,8 @@ int main() {
     RUN_TEST(test_reset_clears_and_changes_epoch);
     RUN_TEST(test_text_bytes_and_ram);
     RUN_TEST(test_reload_keeps_sequence_contiguous);
+    RUN_TEST(test_configured_capacity_drops_oldest);
+    RUN_TEST(test_reload_into_smaller_store_keeps_newest);
     RUN_TEST(test_newest_across);
     RUN_TEST(test_newest_across_skips_empty_and_orders_old);
     return UNITY_END();

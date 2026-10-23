@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include "channel_store.h"
 #include "cs_proto.h"
 
 void settingsDefaults(Settings &s, uint32_t nodeId) {
@@ -27,12 +28,19 @@ void settingsDefaults(Settings &s, uint32_t nodeId) {
     s.displayDimLevel = 0;
     s.displayPageSec = 30;
     s.otaAutoInstall = false;
+    s.msgsPerChannel = CS_MSGS_PER_CHANNEL_DEFAULT;
 }
 
 bool settingsFromBlob(const uint8_t *blob, size_t len, uint8_t ver, Settings &out) {
-    if (ver == 7) {
+    if (ver == 8) {
         if (len != sizeof(Settings)) return false;
         memcpy(&out, blob, sizeof(Settings));
+        return true;
+    }
+    if (ver == 7) {
+        if (len != SETTINGS_V7_BLOB_LEN) return false;
+        settingsDefaults(out, 0);
+        memcpy(&out, blob, SETTINGS_V7_END);
         return true;
     }
     // Copy only up to the version's last field: the last blob byte(s) are tail padding.
@@ -105,6 +113,8 @@ bool settingsValidate(const Settings &s, char *err, size_t cap) {
     if (s.displayDimAfterSec > 3600) return fail(err, cap, "Dim after must be 0-3600 s");
     if (s.displayDimLevel >= s.displayBrightness) return fail(err, cap, "Dim level must be below brightness");
     if (s.displayPageSec < 10 || s.displayPageSec > 300) return fail(err, cap, "Page time must be 10-300 s");
+    if (s.msgsPerChannel < CS_MSGS_PER_CHANNEL_MIN || s.msgsPerChannel > CS_MSGS_PER_CHANNEL_MAX)
+        return fail(err, cap, "Messages per channel must be 10-1000");
     return true;
 }
 

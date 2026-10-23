@@ -142,10 +142,11 @@ static String statusJson() {
 }
 
 static void listMessages(int slot, const std::function<void(const char *)> &emit) {
-    if (!s_listBuf) s_listBuf = (StoredMsg *)ps_malloc(sizeof(StoredMsg) * CS_MSGS_PER_CHANNEL);
+    const int cap = s_settings.msgsPerChannel;
+    if (!s_listBuf) s_listBuf = (StoredMsg *)ps_malloc(ChannelStore::ramBytes(cap));
     if (!s_listBuf) return;
     const ChannelStore &st = s_stores[slot];
-    int n = st.copyAfter(st.tailSeq() - 1, s_listBuf, CS_MSGS_PER_CHANNEL);
+    int n = st.copyAfter(st.tailSeq() - 1, s_listBuf, cap);
     uint32_t nowUnix = (uint32_t)time(nullptr), up = millis() / 1000;
     char json[600];
     for (int i = n - 1; i >= 0; i--) {
@@ -165,9 +166,9 @@ static String storageJson() {
         }
         if (i) j += ",";
         j += "{\"name\":\"" + String(s_settings.ch[i].name) + "\",\"count\":" + String(st.count()) +
-             ",\"capacity\":" + String(CS_MSGS_PER_CHANNEL) + ",\"oldestUnix\":" + String(first.rxUnix) +
+             ",\"capacity\":" + String(st.capacity()) + ",\"oldestUnix\":" + String(first.rxUnix) +
              ",\"newestUnix\":" + String(last.rxUnix) + ",\"textBytes\":" + String(st.textBytes()) +
-             ",\"ramBytes\":" + String(ChannelStore::ramBytes()) + ",\"fileBytes\":" + String(persistFileSize(i)) + "}";
+             ",\"ramBytes\":" + String(st.ramBytes()) + ",\"fileBytes\":" + String(persistFileSize(i)) + "}";
     }
     size_t used, total;
     persistUsage(used, total);
@@ -544,11 +545,13 @@ void setup() {
     otaBegin(&s_settings);
 
     static_assert(CS_MAX_CHANNELS == SETTINGS_MAX_CHANNELS, "store and settings channel limits differ");
-    // Only configured channels get a ring (~55 KB of PSRAM each).
+    // Only configured channels get a ring (~224 bytes of PSRAM per message).
+    persistNoteFreePsram();
     for (int i = 0; i < s_settings.chanCount; i++) {
-        if (!s_stores[i].begin(ps_malloc, randomU32)) Serial.printf("[cs] store %d: no PSRAM\n", i);
+        if (!s_stores[i].begin(ps_malloc, randomU32, s_settings.msgsPerChannel))
+            Serial.printf("[cs] store %d: no PSRAM\n", i);
     }
-    persistBegin();
+    persistBegin(s_settings.msgsPerChannel);
     persistLoadAll(s_stores, s_settings);
 
     radioSetPeerKeys([](uint32_t id) { return s_peerKeys.find(id); }, onPkiNoKey);
@@ -606,6 +609,7 @@ void loop() {
     st.airtimePct = 100.0f * s_airtime.usedMs(nowMs) / AirtimeBudget::WINDOW_MS;
     st.dutyLimitPct = s_dutyLimitPct;
     st.chanCount = s_settings.chanCount;
+    st.chanCapacity = s_settings.msgsPerChannel;
     for (int i = 0; i < s_settings.chanCount; i++) st.chanCounts[i] = s_stores[i].count();
     {
         // Flash usage walks the filesystem: refresh every 10 s at most.

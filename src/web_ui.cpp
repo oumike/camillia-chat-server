@@ -4,6 +4,7 @@
 #include "settings_yaml.h"
 #include "radio_link.h"
 #include "ota_update.h"
+#include "persistence.h"
 
 static WebServer               s_server(80);
 static Settings               *s_cfg = nullptr;
@@ -317,6 +318,14 @@ static String renderPage(const Settings &c, const char *error) {
     h += F("</div><div class=\"chanfoot\"><span id=\"chanN\"></span>"
            "<button type=\"button\" class=\"btn sm\" id=\"addCh\">+ Add channel</button></div></div>");
 
+    h += F("<div class=\"card\"><h2><span class=\"ico\">&#9636;</span>Storage</h2>"
+           "<p class=\"sub\">How many messages each channel keeps for nodes to catch up on. When a "
+           "channel is full, its oldest message is dropped. Lowering this drops the oldest messages "
+           "beyond the new limit on restart.</p><div class=\"grid\">");
+    h += numInput("Messages per channel", "msgCap", c.msgsPerChannel, CS_MSGS_PER_CHANNEL_MIN,
+                  CS_MSGS_PER_CHANNEL_MAX, "10-1000; about 224 bytes of PSRAM each, per channel");
+    h += F("</div></div>");
+
     h += F("<div class=\"card\"><h2><span class=\"ico\">&#8634;</span>Replies</h2>"
            "<p class=\"sub\">How stored messages are sent back to nodes catching up.</p><div class=\"grid\">");
     h += numInput("Batch size", "batch", c.batchSize, 1, 50, "Messages per request (1-50)");
@@ -339,7 +348,7 @@ static String renderPage(const Settings &c, const char *error) {
            "<p class=\"sub\">Used by the colour touchscreen builds (V4 expansion, Wio Tracker L2).</p><div class=\"grid\">");
     h += numInput("Brightness", "dispBright", c.displayBrightness, 10, 255, "10-255");
     h += numInput("Dim after", "dispDim", c.displayDimAfterSec, 0, 3600, "Seconds on battery; 0 = never");
-    h += numInput("Dimmed brightness", "dispDimLvl", c.displayDimLevel, 0, 254, "0-254, below brightness");
+    h += numInput("Dimmed brightness", "dispDimLvl", c.displayDimLevel, 0, 254, "0-254, below brightness; 0 = screen off");
     h += numInput("Page change time", "dispPage", c.displayPageSec, 10, 300, "Seconds (10-300)");
     h += F("</div></div>");
 
@@ -430,6 +439,7 @@ static void handleSave() {
     n.batchSize = (uint8_t)constrain(batch, 0, 255);
     n.packetGapMs = (uint16_t)constrain(gap, 0, 65535);
     n.maxHops = (uint8_t)constrain(hops, 0, 255);
+    n.msgsPerChannel = (uint16_t)constrain(s_server.arg("msgCap").toInt(), 0, 65535);
     n.mqttEnabled = s_server.hasArg("mqttOn");
     copyArg("mqttHost", n.mqttHost, sizeof n.mqttHost);
     n.mqttPort = (uint16_t)s_server.arg("mqttPort").toInt();
@@ -445,7 +455,7 @@ static void handleSave() {
     n.displayPageSec = (uint16_t)constrain(s_server.arg("dispPage").toInt(), 0, 65535);
     n.otaAutoInstall = s_server.hasArg("otaAuto");
 
-    if (!err[0]) settingsValidateDevice(n, err, sizeof err);
+    if (!err[0] && settingsValidateDevice(n, err, sizeof err)) persistFits(n, err, sizeof err);
     if (err[0]) {
         s_server.send(400, "text/html", renderPage(n, err));
         return;
@@ -463,7 +473,7 @@ static void handleImport() {
     Settings n = *s_cfg;
     char err[96] = "";
     if (!settingsFromYaml(s_server.arg("yaml").c_str(), n, kPresetMap, err, sizeof err) ||
-        !settingsValidateDevice(n, err, sizeof err)) {
+        !settingsValidateDevice(n, err, sizeof err) || !persistFits(n, err, sizeof err)) {
         String msg = String("Import failed: ") + err;
         s_server.send(400, "text/html", renderPage(*s_cfg, msg.c_str()));
         return;

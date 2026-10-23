@@ -472,7 +472,7 @@ void fillHealth(const DisplayStatus &st) {
         if (i < shown) {
             const char *n = chanOf(st, order[i]);
             snprintf(buf, sizeof buf, "#%s  %d/%d", n && n[0] ? n : "?", st.chanCounts[order[i]],
-                     CS_MSGS_PER_CHANNEL);
+                     st.chanCapacity);
         } else if (overflow && i == shown) {
             int rest = 0;
             for (int k = shown; k < st.chanCount; k++) rest += st.chanCounts[order[k]];

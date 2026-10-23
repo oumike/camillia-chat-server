@@ -31,10 +31,12 @@ size_t utf8Cut(const char *s, size_t len, size_t max) {
 
 }  // namespace
 
-bool ChannelStore::begin(AllocFn alloc, RandomFn random) {
-    _ring = (StoredMsg *)alloc(sizeof(StoredMsg) * CS_MSGS_PER_CHANNEL);
+bool ChannelStore::begin(AllocFn alloc, RandomFn random, int capacity) {
+    if (capacity < 1) capacity = 1;
+    _ring = (StoredMsg *)alloc(ramBytes(capacity));
     _random = random;
     if (!_ring) return false;
+    _cap = capacity;
     reset(_random());
     _dirty = false;
     return true;
@@ -45,12 +47,12 @@ bool ChannelStore::add(uint32_t from, uint32_t packetId, const char *text, size_
     if (findSeqAfterAnchor(from, packetId)) return false;
 
     int slot;
-    if (_count < CS_MSGS_PER_CHANNEL) {
-        slot = (_start + _count) % CS_MSGS_PER_CHANNEL;
+    if (_count < _cap) {
+        slot = (_start + _count) % _cap;
         _count++;
     } else {
         slot = _start;
-        _start = (_start + 1) % CS_MSGS_PER_CHANNEL;
+        _start = (_start + 1) % _cap;
     }
     StoredMsg &m = _ring[slot];
     m.seq = ++_lastSeq;
@@ -107,8 +109,8 @@ void ChannelStore::reset(uint32_t newEpoch) {
     _addsSinceSave = 0;
 }
 
-size_t ChannelStore::maxSerializedSize() {
-    return kHeader + (size_t)CS_MSGS_PER_CHANNEL * (kRecordFixed + CS_MAX_TEXT) + 4;
+size_t ChannelStore::maxSerializedSize(int capacity) {
+    return kHeader + (size_t)capacity * (kRecordFixed + CS_MAX_TEXT) + 4;
 }
 
 size_t ChannelStore::serialize(uint8_t *out, size_t cap) const {
@@ -138,7 +140,7 @@ bool ChannelStore::deserialize(const uint8_t *in, size_t len) {
     uint32_t epoch = get32(in + 4);
     uint32_t lastSeq = get32(in + 8);
     int count = in[12] | in[13] << 8;
-    if (count > CS_MSGS_PER_CHANNEL || (uint32_t)count > lastSeq) return false;
+    if ((uint32_t)count > lastSeq) return false;
 
     // Validate everything before touching the ring: seqs strictly increase, end <= lastSeq.
     size_t off = kHeader;
@@ -153,7 +155,11 @@ bool ChannelStore::deserialize(const uint8_t *in, size_t len) {
     }
     if (off != len - 4) return false;
 
+    // Saved under a larger capacity: skip the oldest records.
+    const int skip = count > _cap ? count - _cap : 0;
     off = kHeader;
+    for (int i = 0; i < skip; i++) off += kRecordFixed + in[off + 17];
+    count -= skip;
     for (int i = 0; i < count; i++) {
         StoredMsg &m = _ring[i];
         m.seq = get32(in + off); m.from = get32(in + off + 4);
@@ -169,7 +175,7 @@ bool ChannelStore::deserialize(const uint8_t *in, size_t len) {
     _count = count;
     _lastSeq = lastSeq;
     _epoch = epoch;
-    _dirty = false;
+    _dirty = skip > 0;   // rewrite the trimmed file
     _addsSinceSave = 0;
     return true;
 }

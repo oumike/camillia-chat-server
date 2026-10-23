@@ -38,6 +38,7 @@ struct Settings {
     uint8_t    displayDimLevel;      // 0-255, below displayBrightness
     uint16_t   displayPageSec;       // 10-300
     bool       otaAutoInstall;       // install a newer signed release without asking
+    uint16_t   msgsPerChannel;       // v8: messages kept per channel (10-1000)
 };
 
 // The NVS layout of versions 4-6, frozen: 10 channel slots. Never edit it; it is
@@ -77,6 +78,10 @@ constexpr size_t settingsBlobLen(size_t end) {
 constexpr size_t SETTINGS_V4_BLOB_LEN = settingsBlobLen(offsetof(SettingsV6, displayBrightness));
 constexpr size_t SETTINGS_V5_BLOB_LEN = settingsBlobLen(offsetof(SettingsV6, otaAutoInstall));
 constexpr size_t SETTINGS_V6_BLOB_LEN = sizeof(SettingsV6);
+// Version 7 is the current layout up to otaAutoInstall.
+constexpr size_t SETTINGS_V7_END = offsetof(Settings, otaAutoInstall) + sizeof(bool);
+constexpr size_t SETTINGS_V7_BLOB_LEN =
+    (SETTINGS_V7_END + alignof(Settings) - 1) / alignof(Settings) * alignof(Settings);
 
 void settingsDefaults(Settings &s, uint32_t nodeId);
 // False with a human-readable reason in err if anything is out of range.
@@ -86,9 +91,9 @@ bool settingsValidate(const Settings &s, char *err, size_t errCap);
 bool parseKeyBase64(const char *in, uint8_t key[32], uint8_t &len);
 void formatKeyBase64(const uint8_t *key, uint8_t len, char *out, size_t cap);
 
-// Rebuild Settings from a stored NVS blob (pure). Version 7 is the current layout
-// (20 channels); 4-6 had 10 channel slots and predate later fields (v4: display,
-// v5: OTA), which take their defaults.
+// Rebuild Settings from a stored NVS blob (pure). Version 8 is the current layout;
+// 7 predates msgsPerChannel; 4-6 had 10 channel slots and predate later fields
+// (v4: display, v5: OTA). Missing fields take their defaults.
 bool settingsFromBlob(const uint8_t *blob, size_t len, uint8_t ver, Settings &out);
 
 // Device only (settings_nvs.cpp).

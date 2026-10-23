@@ -173,8 +173,9 @@ Dependencies on camillia-mt's `config.h` and `debug_flags.h` are replaced with s
 
 ### 5.3 Channel store
 
-- Up to **20 channels**, **250 messages each** (compile-time constants for now). A ring is allocated only for configured channels.
-- Each record about 224 bytes (sequence, sender, packet ID, receive time, text, source LoRa/MQTT): about 55 KB of PSRAM per channel, 1.1 MB at 20 channels (of 2 MB on Heltec V4, 8 MB on the Wio Tracker).
+- Up to **20 channels**, **250 messages each** by default. Messages per channel is a setting (10–1000, web config **Storage** card, YAML `storage.messagesPerChannel`), applied at boot. A ring is allocated only for configured channels.
+- Each record about 224 bytes (sequence, sender, packet ID, receive time, text, source LoRa/MQTT): about 55 KB of PSRAM per channel at 250 messages, 1.1 MB at 20 channels (of 2 MB on Heltec V4, 8 MB on the Wio Tracker). Saving a capacity whose rings or worst-case files would not fit the free PSRAM or the LittleFS partition is rejected.
+- Lowering the capacity keeps each channel's newest messages when its file is loaded; sequence numbers and the epoch are unchanged.
 - When a channel is full, the oldest message is dropped.
 - **Dedupe:** a message heard on both LoRa and MQTT, or relayed several times, is stored once (key: sender + packet ID).
 - **Stored:** text messages (`TEXT_MESSAGE_APP`) broadcast on a monitored channel. **Not stored:** DMs, other ports, and port-256 traffic.
