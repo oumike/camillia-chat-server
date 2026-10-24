@@ -133,27 +133,49 @@ static void test_channels_need_one() {
     TEST_ASSERT_TRUE(starts("[cfg] err commit:"));
 }
 
+// camillia-mt's form (the flasher's mqttCommand()): every field on one line, and
+// a staged broker switches MQTT on.
 static void test_mqtt() {
     CfgCli c(hooks());
-    run(c, "set mqtt on");
-    TEST_ASSERT_EQUAL_STRING("[cfg] ok mqtt staged", s_out);
-    run(c, "set mqtt host mqtt.chimesh.org");
-    TEST_ASSERT_EQUAL_STRING("[cfg] ok mqtt host staged", s_out);
-    run(c, "set mqtt port 1883");
-    run(c, "set mqtt user meshdev");
-    run(c, "set mqtt pass large4cats");
-    run(c, "set mqtt root msh%2FUS%2FIL%2FChi");
+    run(c, "set mqtt host=mqtt.iowamesh.net port=8882 user=iromesh pass=2Gab9eAz root=iromesh tls=0 enc=0");
+    TEST_ASSERT_EQUAL_STRING("[cfg] ok mqtt=mqtt.iowamesh.net:8882 staged", s_out);
     const Settings &s = c.staged();
     TEST_ASSERT_TRUE(s.mqttEnabled);
-    TEST_ASSERT_EQUAL_STRING("mqtt.chimesh.org", s.mqttHost);
-    TEST_ASSERT_EQUAL(1883, s.mqttPort);
-    TEST_ASSERT_EQUAL_STRING("meshdev", s.mqttUser);
-    TEST_ASSERT_EQUAL_STRING("large4cats", s.mqttPass);
-    TEST_ASSERT_EQUAL_STRING("msh/US/IL/Chi", s.mqttRoot);
-    run(c, "set mqtt port 0");
-    TEST_ASSERT_TRUE(starts("[cfg] err mqtt port:"));
-    run(c, "set mqtt off");
+    TEST_ASSERT_EQUAL_STRING("mqtt.iowamesh.net", s.mqttHost);
+    TEST_ASSERT_EQUAL(8882, s.mqttPort);
+    TEST_ASSERT_EQUAL_STRING("iromesh", s.mqttUser);
+    TEST_ASSERT_EQUAL_STRING("2Gab9eAz", s.mqttPass);
+    TEST_ASSERT_EQUAL_STRING("iromesh", s.mqttRoot);
+
+    // Nothing of the previous broker is kept: omitted fields take their defaults.
+    run(c, "set mqtt host=mqtt.chimesh.org root=msh%2FUS%2FIL%2FChi");
+    TEST_ASSERT_EQUAL_STRING("[cfg] ok mqtt=mqtt.chimesh.org:1883 staged", s_out);
+    TEST_ASSERT_EQUAL(1883, c.staged().mqttPort);
+    TEST_ASSERT_EQUAL_STRING("", c.staged().mqttUser);
+    TEST_ASSERT_EQUAL_STRING("msh/US/IL/Chi", c.staged().mqttRoot);
+}
+
+static void test_mqtt_errors() {
+    CfgCli c(hooks());
+    run(c, "set mqtt host=mqtt.example.org");
+    TEST_ASSERT_EQUAL_STRING("[cfg] err mqtt: host and root are required", s_out);
+    run(c, "set mqtt host=h root=r port=0");
+    TEST_ASSERT_EQUAL_STRING("[cfg] err mqtt: bad port \"0\"", s_out);
+    run(c, "set mqtt host=h root=r colour=red");
+    TEST_ASSERT_EQUAL_STRING("[cfg] err mqtt: unknown key \"colour\"", s_out);
+    run(c, "set mqtt host=h root=r tls=1");
+    TEST_ASSERT_EQUAL_STRING("[cfg] err mqtt: TLS is not supported", s_out);
+    run(c, "set mqtt host root=r");
+    TEST_ASSERT_TRUE(starts("[cfg] err mqtt: expected key=value"));
     TEST_ASSERT_FALSE(c.staged().mqttEnabled);
+}
+
+static void test_oktomqtt_accepted() {
+    CfgCli c(hooks());
+    run(c, "set oktomqtt 1");
+    TEST_ASSERT_EQUAL_STRING("[cfg] ok oktomqtt=1 staged", s_out);
+    run(c, "set oktomqtt 2");
+    TEST_ASSERT_EQUAL_STRING("[cfg] err oktomqtt: expected 0 or 1, got \"2\"", s_out);
 }
 
 static void test_role_refused() {
@@ -260,6 +282,8 @@ int main(int, char **) {
     RUN_TEST(test_channels);
     RUN_TEST(test_channels_need_one);
     RUN_TEST(test_mqtt);
+    RUN_TEST(test_mqtt_errors);
+    RUN_TEST(test_oktomqtt_accepted);
     RUN_TEST(test_role_refused);
     RUN_TEST(test_commit_nothing);
     RUN_TEST(test_commit_invalid_keeps_staging);

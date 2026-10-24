@@ -132,6 +132,13 @@ CfgResult CfgCli::handle(const char *line, const Settings &live, char *out, size
         if (!strcmp(field, "channel")) { stage(live); return setChannel(p, out, cap); }
         if (!strcmp(field, "mqtt")) { stage(live); return setMqtt(p, out, cap); }
         if (!strcmp(field, "role")) return reply(out, cap, "[cfg] err role: not supported");
+        // "OK to MQTT" is about uplinking; the server never publishes, so it is
+        // accepted (the flasher sends it with a community's broker) and ignored.
+        if (!strcmp(field, "oktomqtt")) {
+            if (strcmp(p, "0") && strcmp(p, "1"))
+                return reply(out, cap, "[cfg] err oktomqtt: expected 0 or 1, got \"%s\"", p);
+            return reply(out, cap, "[cfg] ok oktomqtt=%s staged", p);
+        }
         stage(live);
         return set(field, p, out, cap);
     }
@@ -235,36 +242,53 @@ CfgResult CfgCli::setChannel(const char *args, char *out, size_t cap) {
     return reply(out, cap, "[cfg] ok channel %s staged", idx);
 }
 
+// cfg set mqtt host=<%enc> [port=N] [user=<%enc>] [pass=<%enc>] root=<%enc> [tls=0|1] [enc=0|1]
+// camillia-mt's form. Every field is sent each time, so nothing of a previous
+// broker is kept; a staged broker switches MQTT on. The server's ingest has no
+// TLS, so tls=1 is refused; enc only matters to a node that uplinks.
 CfgResult CfgCli::setMqtt(const char *args, char *out, size_t cap) {
-    const char *p = args;
-    char what[8];
-    nextWord(p, what, sizeof what);
-    if (!strcmp(what, "on") || !strcmp(what, "off")) {
-        _s.mqttEnabled = what[1] == 'n';
-        return reply(out, cap, "[cfg] ok mqtt staged");
+    char host[sizeof _s.mqttHost] = "", user[sizeof _s.mqttUser] = "", pass[sizeof _s.mqttPass] = "",
+         root[sizeof _s.mqttRoot] = "";
+    unsigned long port = 1883;
+    for (const char *p = args; *p;) {
+        char tok[160];
+        nextWord(p, tok, sizeof tok);
+        char *eq = strchr(tok, '=');
+        if (!eq) return reply(out, cap, "[cfg] err mqtt: expected key=value, got \"%s\"", tok);
+        *eq = 0;
+        const char *k = tok, *v = eq + 1;
+        struct Text { const char *name; char *dst; size_t size; };
+        const Text texts[] = {{"host", host, sizeof host}, {"user", user, sizeof user},
+                              {"pass", pass, sizeof pass}, {"root", root, sizeof root}};
+        bool known = false;
+        for (const Text &t : texts) {
+            if (strcasecmp(k, t.name)) continue;
+            known = true;
+            if (!cfgPercentDecode(v, t.dst, t.size)) {
+                snprintf(out, cap, "[cfg] err mqtt: %s must be %u bytes or fewer", t.name, (unsigned)(t.size - 1));
+                return CfgResult::Reply;
+            }
+        }
+        if (known) continue;
+        if (!strcasecmp(k, "port")) {
+            if (!parseUint(v, 65535, port) || port == 0) return reply(out, cap, "[cfg] err mqtt: bad port \"%s\"", v);
+        } else if (!strcasecmp(k, "tls")) {
+            if (strcmp(v, "0")) return reply(out, cap, "[cfg] err mqtt: TLS is not supported");
+        } else if (!strcasecmp(k, "enc")) {
+            if (strcmp(v, "0") && strcmp(v, "1")) return reply(out, cap, "[cfg] err mqtt: bad enc \"%s\"", v);
+        } else {
+            return reply(out, cap, "[cfg] err mqtt: unknown key \"%s\"", k);
+        }
     }
-    if (!strcmp(what, "port")) {
-        unsigned long n;
-        if (!parseUint(p, 65535, n) || n == 0) return reply(out, cap, "[cfg] err mqtt port: must be 1-65535");
-        _s.mqttPort = (uint16_t)n;
-        return reply(out, cap, "[cfg] ok mqtt port staged");
-    }
-    struct Text { const char *name; char *dst; size_t size; };
-    const Text texts[] = {
-        {"host", _s.mqttHost, sizeof _s.mqttHost},
-        {"user", _s.mqttUser, sizeof _s.mqttUser},
-        {"pass", _s.mqttPass, sizeof _s.mqttPass},
-        {"root", _s.mqttRoot, sizeof _s.mqttRoot},
-    };
-    for (const Text &t : texts) {
-        if (strcmp(what, t.name)) continue;
-        char buf[128];
-        if (!cfgPercentDecode(p, buf, sizeof buf) || strlen(buf) >= t.size)
-            return reply(out, cap, "[cfg] err mqtt %s: bad encoding or too long", t.name);
-        strcpy(t.dst, buf);
-        return reply(out, cap, "[cfg] ok mqtt %s staged", t.name);
-    }
-    return reply(out, cap, "[cfg] err mqtt %s: unknown", what);
+    if (!host[0] || !root[0]) return reply(out, cap, "[cfg] err mqtt: host and root are required");
+    strcpy(_s.mqttHost, host);
+    strcpy(_s.mqttUser, user);
+    strcpy(_s.mqttPass, pass);
+    strcpy(_s.mqttRoot, root);
+    _s.mqttPort = (uint16_t)port;
+    _s.mqttEnabled = true;
+    snprintf(out, cap, "[cfg] ok mqtt=%s:%u staged", host, (unsigned)port);
+    return CfgResult::Reply;
 }
 
 CfgResult CfgCli::logo(const char *args, char *out, size_t cap) {

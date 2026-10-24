@@ -57,8 +57,8 @@ Arguments keep their case. Text values are percent-encoded by the flasher and de
 | `cfg set ssid\|wifipass <%enc>` | ≤ 32 / ≤ 63 bytes. A bare `cfg set wifipass` is an open network. |
 | `cfg channels clear` | Empties the staged channel list: `[cfg] ok channels cleared slots=20`. |
 | `cfg set channel <i> role=primary\|secondary name=<%enc> psk=default\|none\|<base64> [pos= up= down=]` | Sets slot `i` (0-19, in order, with no gaps). Name ≤ 11 bytes. An empty primary name means "named after the preset", as on MT. `pos`, `up` and `down` are accepted and ignored, so MT-style lines work. |
-| `cfg set mqtt on\|off` | `mqttEnabled`. |
-| `cfg set mqtt host\|user\|pass\|root <%enc>`, `cfg set mqtt port <n>` | Fit the existing `Settings` field sizes. |
+| `cfg set mqtt host=<%enc> [port=N] [user=] [pass=] root=<%enc> [tls=0] [enc=0\|1]` | camillia-mt's form (the flasher's `mqttCommand()`): `[cfg] ok mqtt=<host>:<port> staged`. Every field is sent each time (omitted: port 1883, empty login). A staged broker switches MQTT on. `tls=1` is refused, because the ingest has no TLS. `enc` is accepted and has no effect. |
+| `cfg set oktomqtt 0\|1` | Accepted and ignored (the server never publishes). |
 | `cfg logo begin <bytes>` / `data <hex>` / `end <crc32>` / `clear` | LVGL builds only (§3.4). |
 | `cfg commit` | See §3.5. |
 | `cfg abort` | See §3.2. |
