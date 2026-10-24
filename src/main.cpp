@@ -8,8 +8,10 @@
 #include "battery.h"
 #include "battery_level.h"
 #include "board_init.h"
+#include "cfg_cli.h"
 #include "channel_store.h"
 #include "cs_server.h"
+#include "logo_store.h"
 #include "messages_json.h"
 #include "mqtt_ingest.h"
 #include "mesh_channel_plan.h"
@@ -324,16 +326,93 @@ static void handleChatServerPacket(const MeshPacket &pkt, uint32_t nowMs) {
                       pkt.payloadLen, nowMs);
 }
 
+// ── cfg CLI (cfg_cli.h): the web flasher's Customize, and community presets ──
+static int cfgPresetFromName(const char *name) {
+    for (uint8_t i = 0; i < PRESET_COUNT; i++)
+        if (!strcasecmp(kPresets[i].channelName, name)) return presetUsableOnThisRadio(i) ? i : -1;
+    return -1;
+}
+static bool cfgValidate(const Settings &s, char *err, size_t cap) {
+    return settingsValidateDevice(s, err, cap) && persistFits(s, err, cap);
+}
+static char     s_cfgPresetList[200];
+static CfgHooks s_cfgHooks;
+static CfgCli  *s_cfg = nullptr;
+
+static void cfgBegin() {
+    size_t n = 0;
+    for (uint8_t i = 0; i < PRESET_COUNT; i++)
+        if (presetUsableOnThisRadio(i))
+            n += snprintf(s_cfgPresetList + n, sizeof s_cfgPresetList - n, "%s%s", n ? "," : "",
+                          kPresets[i].channelName);
+    s_cfgHooks.presetFromName = cfgPresetFromName;
+    s_cfgHooks.presetName = presetName;
+    s_cfgHooks.regionKnown = regionKnown;
+    s_cfgHooks.validate = cfgValidate;
+    s_cfgHooks.presetList = s_cfgPresetList;
+    s_cfgHooks.hasLogo = displayLogoBox(s_cfgHooks.logoW, s_cfgHooks.logoH);
+    s_cfg = new CfgCli(s_cfgHooks);
+}
+
+// Runs one cfg command (without the leading "cfg "), replying in `reply`. A
+// commit clears every channel's history (a customization usually means another
+// mesh), saves the settings and the logo, and restarts. False if the reply is
+// an error.
+static bool applyCfgLine(const char *line, char *reply, size_t cap) {
+    if (s_cfg->handle(line, s_settings, reply, cap) == CfgResult::Commit) {
+        clearMessages(-1);
+        if (s_cfg->logoStaged()) logoSave(s_cfg->logoData(), s_cfg->logoLen());
+        else if (s_cfg->logoClear()) logoErase();
+        settingsSave(s_cfg->staged());
+        s_cfg->reset();
+        s_restartAtMs = millis() + 500;
+    }
+    return strncmp(reply, "[cfg] err", 9) != 0;
+}
+
+#ifdef CS_SERIAL_TEST
+// The test build's "req <slot> <cursor>" and "disc", which fake a node
+// 0x12345678 at 0 hops. False if `line` is neither.
+static bool serialTestCommand(const String &line, uint32_t nowMs) {
+    uint8_t buf[csp::MAX_PAYLOAD];
+    size_t n = 0;
+    int slot = -1;
+    unsigned long cursor = 0;
+    if (sscanf(line.c_str(), "req %d %lu", &slot, &cursor) >= 1 && slot >= 0 && slot < s_settings.chanCount) {
+        csp::Request r{cursor ? s_stores[slot].epoch() : 0, (uint32_t)cursor, 0, 0};
+        n = csp::encodeRequest(r, buf, sizeof buf);
+    } else if (line == "disc") {
+        slot = -1;
+        n = csp::encodeDiscover(buf, sizeof buf);
+    }
+    if (!n) return false;
+    Serial.printf("[cs] test: %s\n", line.c_str());
+    static uint32_t testPktId = 1;
+    s_server.onPacket(0x12345678, slot < 0 ? 0xFFFFFFFF : s_nodeId, testPktId++, slot, 0, buf, n, nowMs);
+    return true;
+}
+#endif
+
 // USB serial console: "yaml-export" prints the config; "yaml-import" reads YAML
-// until a line "---end---", then validates, saves and restarts. The test build
-// (heltec-v4-test) also accepts "req <slot> <cursor>" and "disc", which fake a
-// node 0x12345678 at 0 hops.
+// until a line "---end---", then validates, saves and restarts; "cfg ..." is the
+// cfg CLI. Lines over 256 bytes are dropped, as on camillia-mt.
 static void serialLoop(uint32_t nowMs) {
+    static constexpr size_t kLineMax = 256;
     static String line, yaml;
-    static bool importing = false;
+    static bool importing = false, overlong = false;
     while (Serial.available()) {
         char c = (char)Serial.read();
-        if (c != '\n' && c != '\r') { line += c; continue; }
+        if (c != '\n' && c != '\r') {
+            if (line.length() < kLineMax) line += c;
+            else overlong = true;
+            continue;
+        }
+        if (overlong) {
+            overlong = false;
+            line = "";
+            Serial.println("[cfg] err line too long");
+            continue;
+        }
         if (importing) {
             if (line == "---end---") {
                 importing = false;
@@ -363,27 +442,16 @@ static void serialLoop(uint32_t nowMs) {
             importing = true;
             yaml = "";
             Serial.println("[cs] yaml-import: paste YAML, finish with a line ---end---");
+        } else if (line == "cfg" || line.startsWith("cfg ")) {
+            char reply[256];
+            applyCfgLine(line.c_str() + (line.length() > 3 ? 4 : 3), reply, sizeof reply);
+            Serial.println(reply);
 #ifdef CS_SERIAL_TEST
-        } else {
-            uint8_t buf[csp::MAX_PAYLOAD];
-            size_t n = 0;
-            int slot = -1;
-            unsigned long cursor = 0;
-            if (sscanf(line.c_str(), "req %d %lu", &slot, &cursor) >= 1 && slot >= 0 && slot < s_settings.chanCount) {
-                csp::Request r{cursor ? s_stores[slot].epoch() : 0, (uint32_t)cursor, 0, 0};
-                n = csp::encodeRequest(r, buf, sizeof buf);
-            } else if (line == "disc") {
-                slot = -1;
-                n = csp::encodeDiscover(buf, sizeof buf);
-            }
-            if (n) {
-                Serial.printf("[cs] test: %s\n", line.c_str());
-                static uint32_t testPktId = 1;
-                s_server.onPacket(0x12345678, slot < 0 ? 0xFFFFFFFF : s_nodeId, testPktId++, slot, 0, buf, n, nowMs);
-            } else {
-                Serial.printf("[cs] unknown command \"%s\"\n", line.c_str());
-            }
+        } else if (serialTestCommand(line, nowMs)) {
 #endif
+        } else {
+            const int sp = line.indexOf(' ');
+            Serial.printf("[cli] unknown command: %s\n", (sp < 0 ? line : line.substring(0, sp)).c_str());
         }
         line = "";
     }
@@ -540,6 +608,7 @@ void setup() {
     batteryBegin();
     wifiBegin();
     configTzTime(s_settings.tz, "pool.ntp.org");
+    cfgBegin();
     webBegin(&s_settings, [] { s_restartAtMs = millis() + 1500; }, statusJson, listMessages, clearMessages, storageJson);
     webSetAnnounce([] { return s_server.announceBroadcast(); });
     otaBegin(&s_settings);
