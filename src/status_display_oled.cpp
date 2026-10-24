@@ -120,3 +120,6 @@ void displayUpdate(const DisplayStatus &st) {
     s_oled.drawString(0, 51, st.ip[0] ? st.ip : "IP --");
     s_oled.display();
 }
+
+// No logo on this display: cfg caps leaves it out.
+bool displayLogoBox(uint16_t &, uint16_t &) { return false; }

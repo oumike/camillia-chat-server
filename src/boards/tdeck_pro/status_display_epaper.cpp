@@ -262,3 +262,6 @@ void displayUpdate(const DisplayStatus &st) {
     refresh(!s_drawnOnce || s_partials >= kFullEvery);
     s_drawnOnce = true;
 }
+
+// No logo on this display: cfg caps leaves it out.
+bool displayLogoBox(uint16_t &, uint16_t &) { return false; }

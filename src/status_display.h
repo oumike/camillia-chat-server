@@ -47,3 +47,7 @@ struct DisplayStatus {
 // is first allowed to draw, at least kSplashMs after this call.
 void displayBegin();
 void displayUpdate(const DisplayStatus &st);   // redraws at most once a second
+
+// The splash box a `cfg logo` image is fitted to, for `cfg caps`. False on
+// builds that draw no logo (the OLED and the e-paper).
+bool displayLogoBox(uint16_t &w, uint16_t &h);

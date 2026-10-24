@@ -11,12 +11,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <vector>
 #include <lvgl.h>
 #include "battery_level.h"
 #include "board.h"
 #include "cs_server.h"
 #include "display_hal.h"
 #include "display_text.h"
+#include "logo_store.h"
 #include "mesh_channel_plan.h"
 #include "page_cycler.h"
 
@@ -98,6 +100,8 @@ uint8_t      *s_buf1 = nullptr, *s_buf2 = nullptr;
 lv_obj_t      *s_splash = nullptr;
 lv_draw_buf_t *s_splashBuf = nullptr;
 uint32_t       s_splashUntilMs = 0;
+uint16_t      *s_logoPx = nullptr;   // the stored logo, rendered (PSRAM)
+lv_draw_buf_t  s_logoBuf;
 
 lv_obj_t *s_main = nullptr;
 lv_obj_t *s_barRight = nullptr;
@@ -265,6 +269,19 @@ void drawCamellia(lv_draw_buf_t *b, int cx, int cy) {
     circle(b, cx + 14 * k, cy + 31 * k, 6 * k, LEAF_LIGHT, false);
 }
 
+// Where the splash title block ends (y), shared by buildSplash() and logoBox().
+int32_t splashTitleEnd() {
+    const Fonts F = fonts();
+    return 22 + lh(F.splash1) + 2 + lh(F.splash2) + 2 + lh(F.splash3) + 2;
+}
+
+// The band between the title block and the card's foot, inset 20 px at the
+// sides and 4 px top and bottom: the flower's place, and the logo's box.
+void logoBox(uint16_t &w, uint16_t &h) {
+    w = (uint16_t)(kW - 40);
+    h = (uint16_t)((kH - 10 - 40) - splashTitleEnd() - 8);
+}
+
 void buildSplash() {
     const uint16_t bgTop = blend565(kBgMain, kPanelBg, 96);
     const uint16_t cardEdge = blend565(kPanelBg, kAccent, 66);
@@ -294,10 +311,28 @@ void buildSplash() {
     // Title block from y 22 (y 22 / 44 / 64 at tier 0).
     const Fonts F = fonts();
     const int32_t y1 = 22, y2 = y1 + lh(F.splash1) + 2, y3 = y2 + lh(F.splash2) + 2;
-    const int32_t titleEnd = y3 + lh(F.splash3) + 2;
+    const int32_t titleEnd = splashTitleEnd();
     lv_obj_align(mkText(s_splash, F.splash1, lv_color_hex(kTextMain), "Camillia"), LV_ALIGN_TOP_MID, 0, y1);
     lv_obj_align(mkText(s_splash, F.splash2, lv_color_hex(kTextMain), "Chat Server"), LV_ALIGN_TOP_MID, 0, y2);
     lv_obj_align(mkText(s_splash, F.splash3, c565(dimCol), "v" CS_VERSION), LV_ALIGN_TOP_MID, 0, y3);
+
+    // A logo sent with `cfg logo` takes the flower's place, centred in the same
+    // band; the flasher has already fitted it to the box and flattened it on the
+    // card colour.
+    std::vector<uint8_t> png;
+    if (logoLoad(png)) {
+        uint16_t w, h;
+        logoBox(w, h);
+        s_logoPx = logoRender565(png.data(), png.size(), w, h, kPanelBg);
+        if (s_logoPx) {
+            lv_draw_buf_init(&s_logoBuf, w, h, LV_COLOR_FORMAT_RGB565, LV_STRIDE_AUTO, s_logoPx, (uint32_t)w * h * 2);
+            lv_obj_t *img = lv_canvas_create(s_splash);
+            lv_obj_remove_flag(img, LV_OBJ_FLAG_CLICKABLE);
+            lv_canvas_set_draw_buf(img, &s_logoBuf);
+            lv_obj_set_pos(img, (kW - w) / 2, (titleEnd + (kH - 10 - 40)) / 2 - h / 2);
+            return;
+        }
+    }
 
     // Flower centred between the title block and cardY + cardH - 40, as in
     // drawBootSplash. 80x76 canvas per scale step, mark centre at (40, 32).
@@ -319,6 +354,8 @@ void endSplash() {
     s_splash = nullptr;
     if (s_splashBuf) lv_draw_buf_destroy(s_splashBuf);
     s_splashBuf = nullptr;
+    if (s_logoPx) heap_caps_free(s_logoPx);
+    s_logoPx = nullptr;
 }
 
 // ── Main screen ──────────────────────────────────────────────────────────────
@@ -534,6 +571,11 @@ void fillActivity(const DisplayStatus &st) {
 }
 
 }  // namespace
+
+bool displayLogoBox(uint16_t &w, uint16_t &h) {
+    logoBox(w, h);
+    return true;
+}
 
 void displayBegin() {
     char err[64] = "";
