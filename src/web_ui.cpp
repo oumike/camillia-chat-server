@@ -1,5 +1,6 @@
 #include "web_ui.h"
 #include <WebServer.h>
+#include "community_presets.h"
 #include "mesh_channel_plan.h"
 #include "settings_yaml.h"
 #include "radio_link.h"
@@ -14,6 +15,8 @@ static MessageLister           s_listMessages;
 static MessageClearer          s_clearMessages;
 static std::function<String()> s_storageJson;
 static std::function<bool()>   s_announce;
+static std::function<bool(int, char *, size_t)> s_applyPreset;
+static std::function<const char *(int)>         s_presetProblem;
 
 static const char *presetName(uint8_t i) { return i < PRESET_COUNT ? kPresets[i].channelName : nullptr; }
 static int presetIndex(const char *name) {
@@ -110,6 +113,7 @@ border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:point
 .icon{font:inherit;width:36px;height:36px;flex:none;border-radius:9px;border:1px solid var(--line);background:var(--card);
 color:var(--dim);cursor:pointer;display:grid;place-items:center}
 .icon:hover{color:var(--accent);border-color:var(--accent)}.icon.del:hover{color:var(--bad);border-color:var(--bad)}
+.cp{margin-top:4px}.cp .field{margin-bottom:8px}#cpInfo{border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:13px}#cpInfo ul{margin:6px 0;padding-left:18px}#cpInfo .warn{color:var(--bad);font-weight:600}
 .err{background:#d6454518;border:1px solid var(--bad);color:var(--bad);padding:10px 14px;border-radius:10px;margin:0 0 16px;font-weight:600}
 .chans{display:flex;flex-direction:column;gap:10px;margin:0 0 12px}
 .chan{display:grid;grid-template-columns:34px minmax(110px,1fr) minmax(180px,2.2fr) 36px;gap:10px;align-items:start;
@@ -249,8 +253,70 @@ async function fwPost(p){await fetch(p,{method:'POST'});setTimeout(fw,300)}
 $('fwCheck').onclick=()=>fwPost('/ota/check');
 $('fwInstall').onclick=()=>{if(confirm('Install '+$('fwLatest').textContent+'? The server restarts when it is done.'))fwPost('/ota/install')};
 setInterval(()=>{if(!$('tabMonitor').hidden)load()},15000);
+{const cp=$('cp'),info=$('cpInfo');const groups={};
+for(const p of CP){const g=groups[p.area]||(groups[p.area]=el('optgroup'));g.label=p.area;const o=el('option','',p.label+(p.problem?' — '+p.problem:''));o.value=p.id;o.disabled=!!p.problem;g.append(o)}
+cp.append(...Object.values(groups));
+for(const ev of['input','change'])cp.addEventListener(ev,e=>e.stopPropagation());
+cp.onchange=()=>{const p=CP.find(x=>x.id==cp.value);info.hidden=!p;if(!p)return;info.replaceChildren();
+const line=(k,v)=>{const d=el('div');d.append(el('b','',k+': '),v);info.append(d)};
+line('Region',p.region);line('Radio',p.preset?p.preset+(p.slot?', slot '+p.slot:', its own slot'):'keeps this server\'s preset and slot');
+const ul=el('ul');for(const[n,k]of p.chans)ul.append(el('li','',n+' ('+k+')'));line('Channels',ul);
+line('MQTT',p.mqtt?p.mqtt[0]+', root topic '+p.mqtt[1]+', switched on':'keeps this server\'s settings');
+if(p.notes)info.append(el('p','sub',p.notes));
+if(p.url){const a=el('a','',p.url);a.href=p.url;a.target='_blank';a.rel='noreferrer';info.append(a)}
+info.append(el('p','warn','This replaces every channel and clears all stored message history.'));
+const b=el('button','btn danger','Apply preset and restart');b.type='button';const msg=el('span','sub');
+b.onclick=async()=>{b.disabled=true;msg.textContent=' Applying…';
+try{const r=await fetch('/preset',{method:'POST',body:new URLSearchParams({id:p.id})});const t=await r.text();
+if(r.ok){form.dataset.sub=1;document.open();document.write(t);document.close();return}msg.textContent=' '+t}catch(e){msg.textContent=' Could not reach the server.'}b.disabled=false};
+info.append(b,msg)}}
 show(location.hash=='#monitor'||location.hash=='#messages'?'monitor':'config');status();setInterval(status,5000);fw();
 )JS";
+
+// A JSON string literal, safe inside a <script> (no "</" sequences).
+static String jsonStr(const char *in) {
+    String o = "\"";
+    for (const char *p = in; *p; p++) {
+        const unsigned char ch = (unsigned char)*p;
+        if (ch == '"' || ch == '\\') { o += '\\'; o += (char)ch; }
+        else if (ch == '<') o += "\\u003c";
+        else if (ch < 0x20) { char b[8]; snprintf(b, sizeof b, "\\u%04x", ch); o += b; }
+        else o += (char)ch;
+    }
+    return o + "\"";
+}
+
+static const char *presetLabel(const char *channelName) {
+    for (uint8_t i = 0; i < PRESET_COUNT; i++)
+        if (!strcmp(kPresets[i].channelName, channelName)) return kPresets[i].name;
+    return channelName;
+}
+
+// The community presets, for the Radio card's picker: what each one would
+// change, never a channel key or a broker password.
+static String presetsJson() {
+    String j = "[";
+    for (int i = 0; i < kCommunityPresetCount; i++) {
+        const CommunityPreset &p = kCommunityPresets[i];
+        const char *why = s_presetProblem ? s_presetProblem(i) : nullptr;
+        if (i) j += ",";
+        j += String("{\"id\":") + jsonStr(p.id) + ",\"area\":" + jsonStr(p.area) + ",\"label\":" +
+             jsonStr(p.label) + ",\"url\":" + jsonStr(p.url) + ",\"region\":" + jsonStr(p.region) +
+             ",\"preset\":" + jsonStr(p.preset[0] ? presetLabel(p.preset) : "") + ",\"slot\":" + p.slot +
+             ",\"notes\":" + jsonStr(p.notes) + ",\"problem\":" + (why ? jsonStr(why) : String("null")) +
+             ",\"chans\":[";
+        for (int k = 0; k < p.channelCount; k++) {
+            const CommunityPresetChannel &c = kCommunityPresetChannels[p.firstChannel + k];
+            const char *key = !strcmp(c.psk, "default") ? "default key" : !strcmp(c.psk, "none") ? "no key" : "own key";
+            j += String(k ? "," : "") + "[" + jsonStr(c.name[0] ? c.name : (p.preset[0] ? p.preset : "(preset name)")) +
+                 "," + jsonStr(key) + "]";
+        }
+        j += "],\"mqtt\":";
+        j += p.mqtt.host[0] ? String("[") + jsonStr(p.mqtt.host) + "," + jsonStr(p.mqtt.root) + "]" : String("null");
+        j += "}";
+    }
+    return j + "]";
+}
 
 static String renderPage(const Settings &c, const char *error) {
     String h;
@@ -296,7 +362,10 @@ static String renderPage(const Settings &c, const char *error) {
     }
     h += field("Preset", sel + "</select>");
     h += numInput("Frequency slot", "slot", c.freqSlot, 0, 255, "0 = automatic, from the preset name");
-    h += F("</div></div>");
+    h += F("</div><div class=\"cp\"><label class=\"field\"><span>Community preset</span><select id=\"cp\">"
+           "<option value=\"\">Set up for a local mesh&hellip;</option></select>"
+           "<small>Region, radio and channels as a community publishes them, and its MQTT broker if it "
+           "has one.</small></label><div id=\"cpInfo\" hidden></div></div></div>");
 
     h += F("<div class=\"card\"><h2><span class=\"ico\">#</span>Channels</h2>"
            "<p class=\"sub\">Channels the server stores and replays. Names and keys must match the "
@@ -404,7 +473,9 @@ static String renderPage(const Settings &c, const char *error) {
            "<p id=\"count\" class=\"sub\"></p><div class=\"msgs\" id=\"list\"></div></div></section></main>"
            "<div class=\"savebar\" id=\"savebar\"><div class=\"wrap\"><span id=\"saveMsg\">"
            "Saving restarts the server.</span><button type=\"submit\" form=\"cfg\" class=\"btn primary\">"
-           "Save and restart</button></div></div><script>");
+           "Save and restart</button></div></div><script>const CP=");
+    h += presetsJson();
+    h += F(";</script><script>");
     h += kScript;
     h += F("</script></body></html>");
     return h;
@@ -482,9 +553,7 @@ static void handleImport() {
     commit(n);
 }
 
-static void commit(const Settings &n) {
-    *s_cfg = n;
-    settingsSave(n);
+static void sendRestarting() {
     s_server.send(200, "text/html",
                   F("<!doctype html><meta charset=\"utf-8\"><meta name=\"viewport\" "
                     "content=\"width=device-width,initial-scale=1\"><title>Restarting</title>"
@@ -497,7 +566,28 @@ static void commit(const Settings &n) {
                     "small{opacity:.7}</style><div><i></i><b>Saved. Restarting&hellip;</b><br>"
                     "<small>If the WiFi settings changed, reconnect to the new network.</small></div>"
                     "<script>setTimeout(()=>location='/',8000)</script>"));
+}
+
+static void commit(const Settings &n) {
+    *s_cfg = n;
+    settingsSave(n);
+    sendRestarting();
     if (s_onSaved) s_onSaved();
+}
+
+// POST /preset id=<community preset id>: applied through the cfg CLI, whose
+// commit clears history, saves and restarts.
+static void handlePreset() {
+    const String id = s_server.arg("id");
+    int idx = -1;
+    for (int i = 0; i < kCommunityPresetCount; i++)
+        if (id == kCommunityPresets[i].id) idx = i;
+    char err[160] = "No such community preset";
+    if (idx < 0 || !s_applyPreset || !s_applyPreset(idx, err, sizeof err)) {
+        s_server.send(400, "text/plain", err);
+        return;
+    }
+    sendRestarting();
 }
 
 static void handleMessages() {
@@ -544,6 +634,7 @@ void webBegin(Settings *settings, std::function<void()> onSaved, std::function<S
     s_server.on("/save", HTTP_POST, handleSave);
     s_server.on("/export.yaml", HTTP_GET, handleExport);
     s_server.on("/import", HTTP_POST, handleImport);
+    s_server.on("/preset", HTTP_POST, handlePreset);
     s_server.on("/messages", HTTP_GET, handleMessages);
     s_server.on("/clear", HTTP_POST, handleClear);
     s_server.on("/storage", HTTP_GET, [] {
@@ -567,5 +658,10 @@ void webBegin(Settings *settings, std::function<void()> onSaved, std::function<S
 }
 
 void webSetAnnounce(std::function<bool()> announce) { s_announce = announce; }
+
+void webSetPresets(std::function<bool(int, char *, size_t)> apply, std::function<const char *(int)> problem) {
+    s_applyPreset = apply;
+    s_presetProblem = problem;
+}
 
 void webLoop() { s_server.handleClient(); }

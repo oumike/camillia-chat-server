@@ -16,4 +16,7 @@ void webBegin(Settings *settings, std::function<void()> onSaved,
               MessageClearer clearMessages, std::function<String()> storageJson);
 // Handler for the "Send announcement" button; returns false if it could not be queued.
 void webSetAnnounce(std::function<bool()> announce);
+// Community presets for the Radio card: apply(idx, err, cap) runs one through
+// the cfg CLI (false with the reason), problem(idx) says why one cannot be used.
+void webSetPresets(std::function<bool(int, char *, size_t)> apply, std::function<const char *(int)> problem);
 void webLoop();
