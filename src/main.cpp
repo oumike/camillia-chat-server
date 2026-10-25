@@ -10,6 +10,8 @@
 #include "board_init.h"
 #include "cfg_cli.h"
 #include "channel_store.h"
+#include "community_preset_lines.h"
+#include "community_presets.h"
 #include "cs_server.h"
 #include "logo_store.h"
 #include "messages_json.h"
@@ -368,6 +370,38 @@ static bool applyCfgLine(const char *line, char *reply, size_t cap) {
         s_restartAtMs = millis() + 500;
     }
     return strncmp(reply, "[cfg] err", 9) != 0;
+}
+
+const char *communityPresetProblem(int idx) {
+    if (idx < 0 || idx >= kCommunityPresetCount) return "No such community preset";
+    const CommunityPreset &p = kCommunityPresets[idx];
+    if (!regionKnown(p.region)) return "Its region is not one this server knows";
+    if (p.preset[0] && cfgPresetFromName(p.preset) < 0) return "Its radio preset needs a radio this board does not have";
+    if (p.mqtt.host[0] && p.mqtt.tls) return "Its MQTT broker needs TLS, which the server does not have";
+    return nullptr;
+}
+
+// Applies community preset idx through the cfg CLI; on success the commit clears
+// history, saves and restarts. False with the reason in err otherwise, with
+// nothing staged left behind.
+static bool communityPresetApply(int idx, char *err, size_t cap) {
+    if (const char *why = communityPresetProblem(idx)) {
+        snprintf(err, cap, "%s", why);
+        return false;
+    }
+    static CfgPresetLine lines[CFG_PRESET_MAX_LINES];
+    const int n = communityPresetLines(idx, lines, CFG_PRESET_MAX_LINES);
+    char reply[256];
+    s_cfg->reset();
+    for (int i = 0; i < n; i++) {
+        if (!applyCfgLine(lines[i].text, reply, sizeof reply)) {
+            s_cfg->reset();
+            snprintf(err, cap, "%s", reply + (strncmp(reply, "[cfg] err ", 10) ? 0 : 10));
+            return false;
+        }
+    }
+    Serial.printf("[cs] community preset %s applied\n", kCommunityPresets[idx].id);
+    return n > 0;
 }
 
 #ifdef CS_SERIAL_TEST
