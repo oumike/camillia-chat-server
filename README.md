@@ -67,6 +67,37 @@ point comes back.
 discovery channel, up to the configured max hops, so camillia nodes that are
 searching pick up this server without waiting for their next DISCOVER.
 
+**Community Preset**, in the Radio card, sets the server up for a local mesh
+(ChiMesh, MichMesh, Freq51 and about 40 more). It sets the region, radio preset,
+frequency slot and channel list as the community publishes them, plus its MQTT
+broker if it has one. Before anything changes, it shows what will change and the
+community's notes. Applying replaces every channel, clears all stored message
+history and restarts. Presets this board's radio cannot run are greyed out.
+`src/community_presets.{h,cpp}` are generated from `PROFILES` in
+camillia-mt-web's `src/customize.js` by `node tools/gen_community_presets.mjs`,
+so the server offers the same list as the web flasher and camillia-mt. Re-run it
+when that list changes.
+
+## Customize from the web flasher
+
+The flasher's **Flash and Customize** on the chat server's page sets the radio,
+channels (up to 20), names, home Wi-Fi, a community's MQTT broker and a boot
+logo, or starts from a community profile. It applies them over USB right after
+the flash. On the TFT builds the logo takes the camellia's place on the splash;
+the OLED and e-paper builds have no logo. The server cannot use a broker that
+needs TLS.
+
+It speaks camillia-mt's `cfg` serial CLI (`src/cfg_cli.cpp`). `cfg caps`
+reports `product=cs`, 20 channel slots, the presets this radio can run and the
+logo box. `cfg set ...`, `cfg channels clear` / `cfg set channel` and
+`cfg logo begin` / `data` / `end` stage changes. `cfg commit` saves them,
+clears every channel's history and restarts, and `cfg abort` drops them. `role`
+is refused, and `oktomqtt` is accepted and ignored, since the server never
+publishes.
+
+The same USB console also takes `yaml-export` and `yaml-import`, which carry the
+whole configuration as YAML.
+
 ## OTA updates
 
 The **Firmware** card in the web config checks for and installs new stable
