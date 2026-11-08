@@ -204,11 +204,12 @@ void test_blob_current_and_bad() {
     memcpy(blob, &a, sizeof blob);
     a.otaAutoInstall = true;
     memcpy(blob, &a, sizeof blob);
-    TEST_ASSERT_TRUE(settingsFromBlob(blob, sizeof blob, 8, b));
+    TEST_ASSERT_TRUE(settingsFromBlob(blob, sizeof blob, 9, b));
     TEST_ASSERT_EQUAL_STRING("Cur", b.longName);
     TEST_ASSERT_EQUAL(77, b.displayPageSec);
     TEST_ASSERT_TRUE(b.otaAutoInstall);
-    TEST_ASSERT_FALSE(settingsFromBlob(blob, sizeof blob - 1, 8, b));
+    TEST_ASSERT_FALSE(settingsFromBlob(blob, sizeof blob - 1, 9, b));
+    TEST_ASSERT_FALSE(settingsFromBlob(blob, sizeof blob, 8, b));
     TEST_ASSERT_FALSE(settingsFromBlob(blob, sizeof blob, 6, b));
     TEST_ASSERT_FALSE(settingsFromBlob(blob, sizeof blob, 4, b));
     TEST_ASSERT_FALSE(settingsFromBlob(blob, SETTINGS_V4_BLOB_LEN, 3, b));
@@ -226,6 +227,32 @@ void test_upgrade_v7_blob() {
     TEST_ASSERT_TRUE(b.otaAutoInstall);
     TEST_ASSERT_EQUAL(250, b.msgsPerChannel);
     TEST_ASSERT_FALSE(settingsFromBlob((const uint8_t *)&a, sizeof(Settings), 7, b));
+}
+
+void test_upgrade_v8_blob() {
+    Settings a, b;
+    settingsDefaults(a, 1);
+    strcpy(a.longName, "Eight");
+    a.msgsPerChannel = 400;
+    a.senderFilter = 3;   // not part of a v8 blob
+    memset(&b, 0xEE, sizeof b);
+    TEST_ASSERT_TRUE(settingsFromBlob((const uint8_t *)&a, SETTINGS_V8_BLOB_LEN, 8, b));
+    TEST_ASSERT_EQUAL_STRING("Eight", b.longName);
+    TEST_ASSERT_EQUAL(400, b.msgsPerChannel);
+    TEST_ASSERT_EQUAL(SENDER_FILTER_OFF, b.senderFilter);
+    TEST_ASSERT_FALSE(settingsFromBlob((const uint8_t *)&a, sizeof(Settings), 8, b));
+}
+
+void test_sender_filter_range() {
+    Settings s;
+    settingsDefaults(s, 1);
+    char err[96] = "";
+    TEST_ASSERT_EQUAL(SENDER_FILTER_OFF, s.senderFilter);
+    s.senderFilter = SENDER_FILTER_NAME_KEY;
+    TEST_ASSERT_TRUE(settingsValidate(s, err, sizeof err));
+    s.senderFilter = SENDER_FILTER_NAME_KEY + 1;
+    TEST_ASSERT_FALSE(settingsValidate(s, err, sizeof err));
+    TEST_ASSERT_NOT_NULL(strstr(err, "Sender filter"));
 }
 
 void test_msgs_per_channel_range() {
@@ -258,5 +285,7 @@ int main() {
     RUN_TEST(test_upgrade_v7_blob);
     RUN_TEST(test_blob_current_and_bad);
     RUN_TEST(test_msgs_per_channel_range);
+    RUN_TEST(test_upgrade_v8_blob);
+    RUN_TEST(test_sender_filter_range);
     return UNITY_END();
 }

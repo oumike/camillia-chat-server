@@ -6,6 +6,15 @@
 
 constexpr int SETTINGS_MAX_CHANNELS = 20;
 
+// Which senders' channel messages are stored (Settings::senderFilter). A node is
+// identified by the NODEINFO it sends: its names and its public key.
+enum SenderFilter : uint8_t {
+    SENDER_FILTER_OFF       = 0,   // store every message
+    SENDER_FILTER_NAME      = 1,   // a long or a short name heard
+    SENDER_FILTER_FULL_NAME = 2,   // both long and short name heard
+    SENDER_FILTER_NAME_KEY  = 3,   // a name and a public key heard
+};
+
 struct ChannelCfg {
     char    name[12];
     uint8_t key[32];
@@ -39,6 +48,7 @@ struct Settings {
     uint16_t   displayPageSec;       // 10-300
     bool       otaAutoInstall;       // install a newer signed release without asking
     uint16_t   msgsPerChannel;       // v8: messages kept per channel (10-1000)
+    uint8_t    senderFilter;         // v9: SenderFilter
 };
 
 // The NVS layout of versions 4-6, frozen: 10 channel slots. Never edit it; it is
@@ -82,6 +92,10 @@ constexpr size_t SETTINGS_V6_BLOB_LEN = sizeof(SettingsV6);
 constexpr size_t SETTINGS_V7_END = offsetof(Settings, otaAutoInstall) + sizeof(bool);
 constexpr size_t SETTINGS_V7_BLOB_LEN =
     (SETTINGS_V7_END + alignof(Settings) - 1) / alignof(Settings) * alignof(Settings);
+// Version 8 is the current layout up to msgsPerChannel.
+constexpr size_t SETTINGS_V8_END = offsetof(Settings, msgsPerChannel) + sizeof(uint16_t);
+constexpr size_t SETTINGS_V8_BLOB_LEN =
+    (SETTINGS_V8_END + alignof(Settings) - 1) / alignof(Settings) * alignof(Settings);
 
 void settingsDefaults(Settings &s, uint32_t nodeId);
 // False with a human-readable reason in err if anything is out of range.
@@ -91,8 +105,8 @@ bool settingsValidate(const Settings &s, char *err, size_t errCap);
 bool parseKeyBase64(const char *in, uint8_t key[32], uint8_t &len);
 void formatKeyBase64(const uint8_t *key, uint8_t len, char *out, size_t cap);
 
-// Rebuild Settings from a stored NVS blob (pure). Version 8 is the current layout;
-// 7 predates msgsPerChannel; 4-6 had 10 channel slots and predate later fields
+// Rebuild Settings from a stored NVS blob (pure). Version 9 is the current layout;
+// 8 predates senderFilter; 7 predates msgsPerChannel; 4-6 had 10 channel slots and predate later fields
 // (v4: display, v5: OTA). Missing fields take their defaults.
 bool settingsFromBlob(const uint8_t *blob, size_t len, uint8_t ver, Settings &out);
 

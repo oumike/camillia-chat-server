@@ -99,8 +99,77 @@ void test_small_cap_terminates() {
     delete n;
 }
 
+void test_name_parts() {
+    NodeNames *n = fresh();
+    TEST_ASSERT_EQUAL(0, n->nameParts(0x10));
+    n->update(0x10, "", "AB", 1);
+    TEST_ASSERT_EQUAL(NodeNames::SHORT_NAME, n->nameParts(0x10));
+    n->update(0x10, "Alice", "", 2);
+    TEST_ASSERT_EQUAL(NodeNames::LONG_NAME | NodeNames::SHORT_NAME, n->nameParts(0x10));
+    n->update(0x11, "Bob", nullptr, 3);
+    TEST_ASSERT_EQUAL(NodeNames::LONG_NAME, n->nameParts(0x11));
+    delete n;
+}
+
+void test_revision_counts_changes() {
+    NodeNames *n = fresh();
+    uint32_t r0 = n->revision();
+    n->update(0x10, "", "", 1);   // creates nothing
+    TEST_ASSERT_EQUAL(r0, n->revision());
+    n->update(0x10, "Alice", "AL", 2);
+    TEST_ASSERT_NOT_EQUAL(r0, n->revision());
+    delete n;
+}
+
+void test_blob_round_trip_keeps_names_and_eviction_order() {
+    NodeNames *a = fresh();
+    for (uint32_t i = 0; i < NODE_NAMES_CAP; i++) {
+        char ln[16];
+        snprintf(ln, sizeof ln, "Node %u", (unsigned)i);
+        a->update(0x1000 + i, ln, "N", 1000 + i);   // 0x1000 is least recent
+    }
+    a->update(0x1000, nullptr, "Z", 5000);          // now 0x1001 is least recent
+    static uint8_t blob[NodeNames::BLOB_MAX];
+    size_t len = a->toBlob(blob, sizeof blob, 6000);
+    TEST_ASSERT_TRUE(len > 0 && len <= sizeof blob);
+
+    NodeNames *b = fresh();
+    TEST_ASSERT_TRUE(b->fromBlob(blob, len, 10));   // after a reboot millis() is small
+    TEST_ASSERT_EQUAL(NODE_NAMES_CAP, b->count());
+    char out[32];
+    b->displayName(0x1005, out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("Node 5", out);
+    TEST_ASSERT_EQUAL(NodeNames::LONG_NAME | NodeNames::SHORT_NAME, b->nameParts(0x1000));
+    b->update(0x9999, "New", "NEW", 20);   // evicts 0x1001, the least recent
+    TEST_ASSERT_EQUAL(0, b->nameParts(0x1001));
+    TEST_ASSERT_NOT_EQUAL(0, b->nameParts(0x1000));
+    delete a;
+    delete b;
+}
+
+void test_blob_rejects_corrupt() {
+    NodeNames *a = fresh();
+    a->update(0x10, "Alice", "AL", 1);
+    uint8_t blob[NodeNames::BLOB_MAX];
+    size_t len = a->toBlob(blob, sizeof blob, 2);
+    NodeNames *b = fresh();
+    b->update(0x20, "Keep", "K", 1);
+    blob[len - 3] ^= 0x40;
+    TEST_ASSERT_FALSE(b->fromBlob(blob, len, 5));
+    TEST_ASSERT_FALSE(b->fromBlob(blob, len - 1, 5));
+    TEST_ASSERT_FALSE(b->fromBlob(blob, 3, 5));
+    TEST_ASSERT_EQUAL(1, b->count());   // unchanged on failure
+    TEST_ASSERT_EQUAL(0, a->toBlob(blob, 8, 2));   // too small
+    delete a;
+    delete b;
+}
+
 int main() {
     UNITY_BEGIN();
+    RUN_TEST(test_name_parts);
+    RUN_TEST(test_revision_counts_changes);
+    RUN_TEST(test_blob_round_trip_keeps_names_and_eviction_order);
+    RUN_TEST(test_blob_rejects_corrupt);
     RUN_TEST(test_fallback_order);
     RUN_TEST(test_evicts_least_recent);
     RUN_TEST(test_long_name_cut_on_utf8_boundary);

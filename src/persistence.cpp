@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <LittleFS.h>
 #include "cs_proto.h"
+#include "node_persist.h"
 
 static uint8_t *s_buf = nullptr;
 static size_t   s_bufCap = 0;
@@ -27,8 +28,9 @@ bool persistFits(const Settings &s, char *err, size_t cap) {
                  (unsigned)(ram / 1024), (unsigned)(s_psramBudget / 1024));
         return false;
     }
-    // Every channel full, plus one .tmp while saving; LittleFS keeps ~10% for metadata.
-    const size_t flash = (size_t)(n + 1) * file, total = s_ok ? LittleFS.totalBytes() : 0;
+    // Every channel full, plus one .tmp while saving, plus the node tables;
+    // LittleFS keeps ~10% for metadata.
+    const size_t flash = (size_t)(n + 1) * file + NODE_PERSIST_FLASH_BYTES, total = s_ok ? LittleFS.totalBytes() : 0;
     if (total && flash > total / 10 * 9) {
         snprintf(err, cap, "%d channels x %d messages need up to %u KB of flash; %u KB available", n, msgs,
                  (unsigned)(flash / 1024), (unsigned)(total / 10 * 9 / 1024));

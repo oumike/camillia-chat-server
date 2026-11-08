@@ -77,6 +77,8 @@ void setStr(char *dst, size_t cap, const std::string &v) {
 
 }  // namespace
 
+static const char *const kSenderFilterNames[] = {"off", "name", "fullName", "nameKey"};
+
 std::string settingsToYaml(const Settings &s, const YamlPresetMap &presets) {
     std::string y = "# camillia chat server config\n"
                     "# Contains channel keys and passwords. Keep it private.\n";
@@ -101,6 +103,7 @@ std::string settingsToYaml(const Settings &s, const YamlPresetMap &presets) {
     kv(y, "  ", "maxHops", num(s.maxHops));
     y += "storage:\n";
     kv(y, "  ", "messagesPerChannel", num(s.msgsPerChannel));
+    if (s.senderFilter <= SENDER_FILTER_NAME_KEY) kv(y, "  ", "senderFilter", kSenderFilterNames[s.senderFilter]);
     y += "mqtt:\n";
     kv(y, "  ", "enabled", s.mqttEnabled ? "true" : "false");
     kv(y, "  ", "host", quote(s.mqttHost));
@@ -198,6 +201,12 @@ bool settingsFromYaml(const char *text, Settings &out, const YamlPresetMap &pres
             if (k == "messagesPerChannel") {
                 if (!toLong(v, 0, 65535, n)) return bad("messagesPerChannel");
                 s.msgsPerChannel = (uint16_t)n;
+            } else if (k == "senderFilter") {
+                int f = -1;
+                for (int i = 0; i <= SENDER_FILTER_NAME_KEY; i++)
+                    if (v == kSenderFilterNames[i]) f = i;
+                if (f < 0) return bad("senderFilter");
+                s.senderFilter = (uint8_t)f;
             }
         } else if (section == "mqtt") {
             if (k == "enabled") {
