@@ -169,6 +169,32 @@ void test_messages_per_channel_roundtrip() {
     TEST_ASSERT_EQUAL(600, b.msgsPerChannel);
 }
 
+void test_sender_filter_roundtrip() {
+    const char *names[] = {"off", "name", "fullName", "nameKey"};
+    for (uint8_t f = SENDER_FILTER_OFF; f <= SENDER_FILTER_NAME_KEY; f++) {
+        Settings a, b;
+        settingsDefaults(a, 1);
+        a.senderFilter = f;
+        std::string y = settingsToYaml(a, kMap);
+        std::string line = std::string("senderFilter: ") + names[f];
+        TEST_ASSERT_NOT_NULL_MESSAGE(strstr(y.c_str(), line.c_str()), names[f]);
+        settingsDefaults(b, 1);
+        char err[96] = "";
+        TEST_ASSERT_TRUE_MESSAGE(settingsFromYaml(y.c_str(), b, kMap, err, sizeof err), err);
+        TEST_ASSERT_EQUAL(f, b.senderFilter);
+    }
+}
+
+void test_sender_filter_bad_value() {
+    Settings b;
+    settingsDefaults(b, 1);
+    b.senderFilter = SENDER_FILTER_NAME;
+    char err[96] = "";
+    TEST_ASSERT_FALSE(settingsFromYaml("storage:\n  senderFilter: maybe\n", b, kMap, err, sizeof err));
+    TEST_ASSERT_NOT_NULL(strstr(err, "senderFilter"));
+    TEST_ASSERT_EQUAL(SENDER_FILTER_NAME, b.senderFilter);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_yaml_round_trip);
@@ -180,5 +206,7 @@ int main() {
     RUN_TEST(test_display_bad_value);
     RUN_TEST(test_ota_auto_install_roundtrip);
     RUN_TEST(test_messages_per_channel_roundtrip);
+    RUN_TEST(test_sender_filter_roundtrip);
+    RUN_TEST(test_sender_filter_bad_value);
     return UNITY_END();
 }

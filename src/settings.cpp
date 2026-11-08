@@ -29,12 +29,19 @@ void settingsDefaults(Settings &s, uint32_t nodeId) {
     s.displayPageSec = 30;
     s.otaAutoInstall = false;
     s.msgsPerChannel = CS_MSGS_PER_CHANNEL_DEFAULT;
+    s.senderFilter = SENDER_FILTER_OFF;
 }
 
 bool settingsFromBlob(const uint8_t *blob, size_t len, uint8_t ver, Settings &out) {
-    if (ver == 8) {
+    if (ver == 9) {
         if (len != sizeof(Settings)) return false;
         memcpy(&out, blob, sizeof(Settings));
+        return true;
+    }
+    if (ver == 8) {
+        if (len != SETTINGS_V8_BLOB_LEN) return false;
+        settingsDefaults(out, 0);
+        memcpy(&out, blob, SETTINGS_V8_END);
         return true;
     }
     if (ver == 7) {
@@ -115,6 +122,7 @@ bool settingsValidate(const Settings &s, char *err, size_t cap) {
     if (s.displayPageSec < 10 || s.displayPageSec > 300) return fail(err, cap, "Page time must be 10-300 s");
     if (s.msgsPerChannel < CS_MSGS_PER_CHANNEL_MIN || s.msgsPerChannel > CS_MSGS_PER_CHANNEL_MAX)
         return fail(err, cap, "Messages per channel must be 10-1000");
+    if (s.senderFilter > SENDER_FILTER_NAME_KEY) return fail(err, cap, "Sender filter must be 0-3");
     return true;
 }
 

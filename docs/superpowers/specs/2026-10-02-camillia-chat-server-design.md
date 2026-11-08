@@ -179,6 +179,8 @@ Dependencies on camillia-mt's `config.h` and `debug_flags.h` are replaced with s
 - When a channel is full, the oldest message is dropped.
 - **Dedupe:** a message heard on both LoRa and MQTT, or relayed several times, is stored once (key: sender + packet ID).
 - **Stored:** text messages (`TEXT_MESSAGE_APP`) broadcast on a monitored channel. **Not stored:** DMs, other ports, and port-256 traffic.
+- **Sender filter:** a setting (web config **Storage** card, YAML `storage.senderFilter`) limits stored messages to senders identified by their NODEINFO: `off` (everyone, the default), `name` (a long or short name heard), `fullName` (both names) or `nameKey` (a name and a public key). It applies when a message arrives, over LoRa or MQTT; messages already stored are kept, and since only stored messages are served, filtered ones never reach clients.
+- **Node tables:** the names and public keys learned from NODEINFO (200 nodes each, least recently updated evicted) are saved to LittleFS (`/cs/nodes.bin`, `/cs/keys.bin`) at most every 5 minutes when changed, and before a restart, and loaded at boot. The sender filter and PKI DMs therefore work straight after a reboot.
 - **Persistence:** each channel is saved to LittleFS on the flash partition. It is saved when it has unsaved changes and either 60 seconds have passed or 20 new messages have arrived, which limits flash wear. It is loaded at boot.
 - If a channel's name or key is changed in config, that channel's store is cleared and gets a new epoch.
 

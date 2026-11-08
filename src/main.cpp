@@ -20,6 +20,8 @@
 #include "mesh_proto.h"
 #include "node_identity.h"
 #include "node_names.h"
+#include "node_persist.h"
+#include "sender_filter.h"
 #include "peer_keys.h"
 #include "pki_identity.h"
 #include "ota_update.h"
@@ -613,6 +615,11 @@ static void ingest(const MeshPacket &pkt, MsgSource source) {
     }
     int slot = slotForPacket(pkt);
     if (pkt.portnum != TEXT_MESSAGE_APP || pkt.hdr.to != 0xFFFFFFFF || slot < 0) return;
+    if (!senderAllowed(s_settings.senderFilter, s_names, s_peerKeys, pkt.hdr.from)) {
+        Serial.printf("[cs] text ch%d from !%08x id %08x via %s: dropped (unidentified)\n", slot,
+                      (unsigned)pkt.hdr.from, (unsigned)pkt.hdr.id, source == SRC_MQTT ? "mqtt" : "lora");
+        return;
+    }
     time_t now = time(nullptr);
     bool added = s_stores[slot].add(pkt.hdr.from, pkt.hdr.id, (const char *)pkt.payload,
                                     pkt.payloadLen, timeValid() ? (uint32_t)now : 0,
@@ -657,6 +664,7 @@ void setup() {
     }
     persistBegin(s_settings.msgsPerChannel);
     persistLoadAll(s_stores, s_settings);
+    nodePersistBegin(s_names, s_peerKeys);
 
     radioSetPeerKeys([](uint32_t id) { return s_peerKeys.find(id); }, onPkiNoKey);
     radioBegin(s_settings, s_nodeId);
@@ -690,6 +698,7 @@ void loop() {
     mqttLoop(nowMs);
 
     persistMaybeSave(s_stores, s_settings.chanCount, nowMs);
+    nodePersistMaybeSave(s_names, s_peerKeys, nowMs);
     identityLoop(nowMs);
 
     static DisplayStatus st;   // static: keeps the loop's stack small
@@ -745,6 +754,7 @@ void loop() {
         // Don't lose messages heard since the last scheduled save.
         for (int i = 0; i < s_settings.chanCount; i++)
             if (s_stores[i].dirty()) persistSaveNow(s_stores[i], i);
+        nodePersistSaveNow(s_names, s_peerKeys);
         ESP.restart();
     }
 }

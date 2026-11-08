@@ -393,6 +393,17 @@ static String renderPage(const Settings &c, const char *error) {
            "beyond the new limit on restart.</p><div class=\"grid\">");
     h += numInput("Messages per channel", "msgCap", c.msgsPerChannel, CS_MSGS_PER_CHANNEL_MIN,
                   CS_MSGS_PER_CHANNEL_MAX, "10-1000; about 224 bytes of PSRAM each, per channel");
+    {
+        static const char *const kFilterLabels[] = {"Everyone", "Nodes with a name",
+                                                    "Nodes with a long and short name",
+                                                    "Nodes with a name and public key"};
+        String fs = "<select name=\"senderFilter\">";
+        for (uint8_t i = SENDER_FILTER_OFF; i <= SENDER_FILTER_NAME_KEY; i++)
+            fs += String("<option value=\"") + i + "\"" + (i == c.senderFilter ? " selected" : "") + ">" +
+                  kFilterLabels[i] + "</option>";
+        h += field("Store messages from", fs + "</select>",
+                   "Identified by the NODEINFO a node sends. Messages already stored are kept.");
+    }
     h += F("</div></div>");
 
     h += F("<div class=\"card\"><h2><span class=\"ico\">&#8634;</span>Replies</h2>"
@@ -512,6 +523,7 @@ static void handleSave() {
     n.packetGapMs = (uint16_t)constrain(gap, 0, 65535);
     n.maxHops = (uint8_t)constrain(hops, 0, 255);
     n.msgsPerChannel = (uint16_t)constrain(s_server.arg("msgCap").toInt(), 0, 65535);
+    n.senderFilter = (uint8_t)constrain(s_server.arg("senderFilter").toInt(), 0, 255);
     n.mqttEnabled = s_server.hasArg("mqttOn");
     copyArg("mqttHost", n.mqttHost, sizeof n.mqttHost);
     n.mqttPort = (uint16_t)s_server.arg("mqttPort").toInt();

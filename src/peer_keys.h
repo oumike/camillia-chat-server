@@ -22,6 +22,15 @@ public:
 
     int count() const { return _count; }
 
+    // Bumped whenever a key is added or replaced.
+    uint32_t revision() const { return _rev; }
+
+    // Save/load the table, as NodeNames::toBlob()/fromBlob() do.
+    static constexpr size_t ENTRY_BLOB = 4 + 4 + 32;
+    static constexpr size_t BLOB_MAX = 8 + PEER_KEYS_CAP * ENTRY_BLOB + 4;
+    size_t toBlob(uint8_t *out, size_t cap, uint32_t nowMs) const;
+    bool fromBlob(const uint8_t *in, size_t len, uint32_t nowMs);
+
 private:
     struct Entry {
         uint32_t id;
@@ -29,6 +38,7 @@ private:
         uint8_t  key[32];
     };
 
-    Entry *_e = nullptr;
-    int    _count = 0;
+    Entry   *_e = nullptr;
+    int      _count = 0;
+    uint32_t _rev = 0;
 };

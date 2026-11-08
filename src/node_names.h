@@ -21,8 +21,25 @@ public:
     // Long name, else short name, else "!%08x". Always NUL-terminated within cap.
     void displayName(uint32_t id, char *out, size_t cap) const;
 
+    // Which names have been heard from id: LONG_NAME | SHORT_NAME bits, 0 if none.
+    static constexpr int LONG_NAME = 1, SHORT_NAME = 2;
+    int nameParts(uint32_t id) const;
+
     // Occupied entries.
     int count() const { return _count; }
+
+    // Bumped whenever an entry is created or changed: a saver compares it with
+    // the revision it last wrote.
+    uint32_t revision() const { return _rev; }
+
+    // The table as a blob to save (0 if cap is too small), entries keeping their
+    // age at nowMs. fromBlob() replaces the table with a saved one, the ages
+    // counted back from nowMs; false, leaving the table as it was, for a corrupt
+    // blob.
+    static constexpr size_t ENTRY_BLOB = 4 + 4 + 25 + 5;
+    static constexpr size_t BLOB_MAX = 8 + NODE_NAMES_CAP * ENTRY_BLOB + 4;
+    size_t toBlob(uint8_t *out, size_t cap, uint32_t nowMs) const;
+    bool fromBlob(const uint8_t *in, size_t len, uint32_t nowMs);
 
 private:
     struct Entry {
@@ -32,6 +49,7 @@ private:
         char     shortName[5];
     };
 
-    Entry *_e = nullptr;
-    int    _count = 0;
+    Entry   *_e = nullptr;
+    int      _count = 0;
+    uint32_t _rev = 0;
 };
